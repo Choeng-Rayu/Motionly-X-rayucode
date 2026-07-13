@@ -31,7 +31,7 @@
 ## Showcase
 
 <div align="center">
-  <video src=".github/assets/showcase.mp4" controls width="900"></video>
+  <img src=".github/assets/showcase.gif" alt="Motionly showcase animation" width="900" />
 </div>
 
 ---
