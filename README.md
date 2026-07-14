@@ -32,6 +32,8 @@
 ## Showcase
 
 <div align="center">
+  <img src=".github/assets/screenshot.jpg" alt="Motionly visual editor interface" width="900" />
+  <br/><br/>
   <img src=".github/assets/showcase.gif" alt="Motionly editor and showcase animation" width="900" />
 </div>
 
