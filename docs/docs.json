@@ -15,7 +15,7 @@
   "navbar": {
     "primary": {
       "type": "github",
-      "href": "https://github.com/PromSereyreaksa/motionly"
+      "href": "https://github.com/COPPSARY/Motionly"
     }
   },
   "navigation": {
@@ -27,43 +27,43 @@
             "group": "Get Started",
             "pages": [
               "introduction",
-              "quickstart",
-              "installation"
+              "installation",
+              "QUICK_START",
+              "USER_GUIDE"
+            ]
+          },
+          {
+            "group": "Visual Editor",
+            "pages": [
+              "UI_GUIDE",
+              "scene-graph"
             ]
           },
           {
             "group": "Motion Language",
             "pages": [
-              "motion-language/overview",
-              "motion-language/canvas-camera",
-              "motion-language/elements",
-              "motion-language/text",
-              "motion-language/sequences"
+              "motion-language"
             ]
           },
           {
             "group": "Animation",
             "pages": [
-              "animation/presets",
-              "animation/text-presets",
-              "animation/keyframes",
-              "animation/easing"
+              "animation-presets",
+              "motion-design-principles",
+              "preset-development-guide"
             ]
           },
           {
             "group": "Export",
             "pages": [
-              "export/overview",
-              "export/formats"
+              "export"
             ]
           },
           {
-            "group": "Guides",
+            "group": "Agents And LLMs",
             "pages": [
-              "guides/first-scene",
-              "guides/logo-reveal",
-              "guides/text-reveal",
-              "guides/ai-authoring"
+              "ai-agents",
+              "write-motionly-skill"
             ]
           }
         ]
