@@ -217,7 +217,7 @@ Core folders:
 
 ## Open Source
 
-Motionly is MIT licensed.
+Motionly is licensed under the Apache License 2.0.
 
 Project docs:
 
