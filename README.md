@@ -1,41 +1,50 @@
-<div align="center">
-  <img src="public/logo.svg" alt="Motionly" height="86" />
-  <br/><br/>
+<table width="100%">
+  <tr>
+    <td align="left" width="120">
+      <img src="public/logo.svg" alt="Motionly Logo" width="100" />
+    </td>
+    <td align="right">
+      <h1>Motionly</h1>
+      <h3 style="margin-top: -10px;">AI-native motion graphics you can still direct.</h3>
+    </td>
+  </tr>
+</table>
 
-  <h1>Motionly</h1>
+<p align="center">
+  <em>AI generates an editable project instead of a finished video.<br/>What AI makes is a starting point you can actually direct.</em>
+</p>
 
-  <p><strong>AI-native motion graphics you can still direct.</strong></p>
+<p align="center">
+  <img src="https://img.shields.io/badge/TypeScript-5.7-3178C6?style=flat&logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/Svelte-5.56-FF3E00?style=flat&logo=svelte&logoColor=white" alt="Svelte">
+  <img src="https://img.shields.io/badge/Canvas-2D_Renderer-E34F26?style=flat&logo=html5&logoColor=white" alt="Canvas">
+  <img src="https://img.shields.io/badge/GSAP-3.15-0AE448?style=flat&logo=greensock&logoColor=white" alt="GSAP">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue?style=flat" alt="License"></a>
+  <br>
+  <a href="https://motionly.mintlify.app/"><img src="https://img.shields.io/badge/Docs-Mintlify-7C3AED?style=flat" alt="Documentation"></a>
+  <a href="https://github.com/COPPSARY/Motionly"><img src="https://img.shields.io/github/stars/COPPSARY/Motionly?style=flat" alt="GitHub Stars"></a>
+</p>
 
-  <p><em>AI generates an editable project instead of a finished video.<br/>What AI makes is a starting point you can actually direct.</em></p>
-
-  <br/>
-
-  [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=fff)](https://www.typescriptlang.org/)
-  [![Svelte](https://img.shields.io/badge/Svelte-FF3E00?style=flat-square&logo=svelte&logoColor=fff)](https://svelte.dev/)
-  [![Canvas](https://img.shields.io/badge/Canvas_Renderer-111827?style=flat-square&logo=html5&logoColor=E34F26)](https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API)
-  [![GSAP](https://img.shields.io/badge/GSAP-0AE448?style=flat-square&logo=greensock&logoColor=000)](https://gsap.com/)
-  [![Motion](https://img.shields.io/badge/Motion-FFF312?style=flat-square&logo=framer&logoColor=000)](https://motion.dev/)
-  [![MP4](https://img.shields.io/badge/Export_MP4-5B7CFA?style=flat-square)](#export)
-
-  <br/><br/>
-
+<p align="center">
   <a href="#overview">Overview</a> &middot;
   <a href="#showcase">Showcase</a> &middot;
   <a href="#visual-editor">Visual Editor</a> &middot;
   <a href="#motion-files">Motion Files</a> &middot;
   <a href="#agent-and-llm-support">Agent and LLM Support</a> &middot;
   <a href="#contributing">Contributing</a>
-</div>
+</p>
 
 ---
 
 ## Showcase
 
-<div align="center">
-  <img src=".github/assets/screenshot.jpg" alt="Motionly visual editor interface" width="900" />
-  <br/><br/>
-  <img src=".github/assets/showcase.gif" alt="Motionly editor and showcase animation" width="900" />
-</div>
+|                     Visual Editor                     |
+| :---------------------------------------------------: |
+| <img src=".github/assets/screenshot.jpg" alt="Motionly Editor" width="900" /> |
+
+|                     Animation Preview                      |
+| :--------------------------------------------------------: |
+| <img src=".github/assets/showcase.gif" alt="Motionly Animation" width="900" /> |
 
 ---
 
@@ -192,6 +201,8 @@ See [AI Authoring Guide](docs/agents/ai-authoring.mdx) for a complete asset and 
 Motionly includes a built-in AI Chat panel and repository guidance for external agent tools.
 
 Open Motionly Assistant beside Assets, enter your own provider key, and describe the animation you want. Motionly detects OpenAI, Anthropic, OpenRouter, Google Gemini, and Hugging Face keys, or accepts a custom OpenAI-compatible endpoint. You can leave the model blank for Motionly's default or enter an exact model ID. The key and chat history stay in browser storage; requests go directly from the browser to that provider, never through a Motionly server. The assistant receives the current project and imported asset list, returns a `.motion` draft, and exposes a **Load into Editor** action that validates the source through the normal parser and scene-graph pipeline.
+
+**Model quality matters.** The AI model you choose directly affects the quality of generated `.motion` projects. More capable models (like Claude 3.5 Sonnet, GPT-4, or equivalent) produce better composition, timing, and use of animation presets. Smaller or older models may generate valid syntax but produce less polished results. For best results, use a frontier model with strong code generation capabilities.
 
 For agents working inside the repository, use these files:
 
