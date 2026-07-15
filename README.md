@@ -40,11 +40,11 @@
 
 |                     Visual Editor                     |
 | :---------------------------------------------------: |
-| <img src=".github/assets/screenshot.jpg" alt="Motionly Editor" width="900" /> |
+| ![Motionly Editor](.github/assets/screenshot.jpg) |
 
 |                     Animation Preview                      |
 | :--------------------------------------------------------: |
-| <img src=".github/assets/showcase.gif" alt="Motionly Animation" width="900" /> |
+| ![Motionly Animation](.github/assets/showcase.gif) |
 
 ---
 
