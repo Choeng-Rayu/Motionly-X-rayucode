@@ -268,6 +268,17 @@ animate title {
           />
         {/if}
       </a>
+      <a
+        class="btn docs-btn"
+        href="https://motionly.mintlify.app/"
+        target="_blank"
+        rel="noreferrer"
+        title="View Documentation"
+        aria-label="View Documentation"
+      >
+        <FileText size={18} />
+        <span class="action-label">Documentation</span>
+      </a>
     </div>
   </div>
 
@@ -420,6 +431,13 @@ animate title {
 
   .github-btn {
     min-width: 92px;
+    justify-content: center;
+    padding: 8px 10px;
+    box-sizing: border-box;
+    text-decoration: none;
+  }
+
+  .docs-btn {
     justify-content: center;
     padding: 8px 10px;
     box-sizing: border-box;

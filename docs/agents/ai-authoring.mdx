@@ -17,6 +17,8 @@ The API key and conversation history are stored in browser `localStorage`. Reque
 
 The assistant asks for a brief explanation followed by one fenced `.motion` project. Generated projects use the same parser → scene graph → renderer pipeline as projects opened or edited manually.
 
+**Model quality matters.** The AI model you choose directly affects the quality of generated `.motion` projects. More capable models (like Claude 3.5 Sonnet, GPT-4, or equivalent) produce better composition, timing, and use of animation presets. Smaller or older models may generate valid syntax but produce less polished results. For best results, use a frontier model with strong code generation capabilities.
+
 ## Use An External Agent
 
 Agents that work directly inside the repository can use Motionly's authoring guidance instead of the in-app panel.
