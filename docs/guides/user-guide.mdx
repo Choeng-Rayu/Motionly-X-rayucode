@@ -1,3 +1,8 @@
+---
+title: User guide
+description: Open, edit, preview, and export .motion projects with Motionly's tracks, clips, video assets, and MP4 output.
+---
+
 # Motionly User Guide
 
 Motionly lets you open, edit, preview, save, and export `.motion` animations visually.
@@ -82,6 +87,30 @@ Audio files:
 - Are **not yet included in MP4 export** (see AUDIO_EXPORT_LIMITATION.md)
 
 Export audio mixing requires WebAudio API implementation and is planned for future work.
+
+## Video Assets
+
+Motionly plays MP4 and WebM assets as native clips. Import a video, drag it onto a track, and the browser decodes frames through the same renderer as images:
+
+```motion
+import "/assets/my-project/intro.mp4" as intro
+
+clip intro {
+  track main
+  start 0s
+  duration 4s
+  trimIn 0s
+  trimOut 0s
+}
+```
+
+Video clips support the same timeline operations as other media—drag to time, trim either edge, split at the playhead, and scrub to a specific frame. During playback, scrubbing, and export, the renderer draws frames from `trimIn + (projectTime - start)`.
+
+Current limitations:
+
+- **MP4 export does not mix video audio.** Motionly writes only the project `audio` element into the exported file.
+- **A single imported video cannot play two source times at once.** If you need the same file at two different offsets on the timeline, import it under two aliases.
+- **Codec support follows the browser** (typically H.264/AAC MP4 and VP8/VP9 WebM).
 
 ## Animation Presets
 
