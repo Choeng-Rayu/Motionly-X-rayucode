@@ -77,6 +77,15 @@ export interface BaseElementProperties {
   opacity: number;
   blur: number;
   brightness: number;
+  contrast: number;
+  saturation: number;
+  hue: number;
+  grayscale: number;
+  sepia: number;
+  invert: number;
+  mask?: string;
+  maskInvert?: boolean;
+  maskVisible?: boolean;
   shadow: number;
   layer: Layer;
   center: boolean;
@@ -87,6 +96,10 @@ export interface BaseElementProperties {
   revealDirection?: string;
   skewX?: number;
   skewY?: number;
+  mediaTime?: number;
+  mediaTrimOut?: number;
+  mediaVolume?: number;
+  mediaMuted?: boolean;
 }
 
 /**
@@ -156,9 +169,25 @@ export interface Sequence {
 /**
  * Complete scene graph
  */
+export type TrackRole = 'main' | 'overlay' | 'audio';
+export type TrackContent = 'primary' | 'video' | 'image' | 'text' | 'effect' | 'audio' | 'mixed';
+
+export interface Track {
+  id: string;
+  label: string;
+  role: TrackRole;
+  content: TrackContent;
+  hidden: boolean;
+  muted: boolean;
+  order: number;
+  declared: boolean;
+}
+
 /**
  * Timeline clip for media/audio
  */
+export type ClipTransitionType = 'crossfade';
+
 export interface Clip {
   id: string;
   assetName: string;
@@ -168,8 +197,13 @@ export interface Clip {
   duration: number;
   trimIn: number;
   trimOut: number;
+  transitionIn?: ClipTransitionType;
+  transitionInDuration: number;
+  transitionOut?: ClipTransitionType;
+  transitionOutDuration: number;
   volume?: number;
   mute?: boolean;
+  sourceOrder: number;
 }
 
 /**
@@ -182,6 +216,7 @@ export interface Scene {
   imports: Asset[];
   elements: Element[];
   animations: Animation[];
+  tracks: Track[];
   clips: Clip[];
   audio?: string; // Path to audio file
 }

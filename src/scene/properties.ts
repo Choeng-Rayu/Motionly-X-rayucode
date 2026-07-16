@@ -16,7 +16,15 @@ import type {
   EffectProperties,
 } from '../types/scene';
 
-const TIME_PROPERTIES = new Set(['duration', 'delay', 'start', 'trimIn', 'trimOut']);
+const TIME_PROPERTIES = new Set([
+  'duration',
+  'delay',
+  'start',
+  'trimIn',
+  'trimOut',
+  'transitionInDuration',
+  'transitionOutDuration',
+]);
 const NUMBER_PROPERTIES = new Set([
   'x',
   'y',
@@ -31,6 +39,12 @@ const NUMBER_PROPERTIES = new Set([
   'revealProgress',
   'blur',
   'brightness',
+  'contrast',
+  'saturation',
+  'hue',
+  'grayscale',
+  'sepia',
+  'invert',
   'shadow',
   'size',
   'intensity',
@@ -107,6 +121,12 @@ export function defaultElementProperties(kind: ElementKind): ElementProperties {
     opacity: 1,
     blur: 0,
     brightness: 1,
+    contrast: 1,
+    saturation: 1,
+    hue: 0,
+    grayscale: 0,
+    sepia: 0,
+    invert: 0,
     shadow: 0,
     layer: 'content',
     center: false,

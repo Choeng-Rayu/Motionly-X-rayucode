@@ -40,7 +40,31 @@ logo {
 }
 ```
 
-Preserve aspect ratio by setting one of `width` or `height`. Useful properties include `x`, `y`, `width`, `height`, `scale`, `rotation`, `opacity`, `blur`, `brightness`, `shadow`, `center`, `cover`, and `layer`.
+Preserve aspect ratio by setting one of `width` or `height`. Useful properties include `x`, `y`, `width`, `height`, `scale`, `rotation`, `opacity`, `blur`, `brightness`, `contrast`, `saturation`, `hue`, `grayscale`, `sepia`, `invert`, `shadow`, `center`, `cover`, and `layer`.
+
+Adjustment values are serializable and animatable. `brightness`, `contrast`, and `saturation` are multipliers (default `1`); `hue` is degrees (default `0`); `grayscale`, `sepia`, and `invert` range from `0` to `1`; and `blur` is measured in pixels. These use deterministic Canvas 2D filters in preview and export. Chroma key is not currently supported.
+
+## Layer Masks
+
+Any visual layer can reuse another layer's evaluated alpha:
+
+```motion
+text matte {
+  value "MASK"
+  center
+  size 220
+}
+
+photo {
+  center
+  width 900
+  mask matte
+  maskInvert false
+  maskVisible false
+}
+```
+
+`mask` stores the source layer ID, `maskInvert` uses inverse alpha, and `maskVisible` keeps the matte visible as normal artwork. Mask layers are hidden by default. Missing, self-referencing, and nested masks are rejected so preview and export remain deterministic.
 
 Layer order: `background`, `hero`, `supporting`, `content`, `details`, `text`, `effects`.
 
@@ -53,6 +77,35 @@ audio "/assets/my-project/background.mp3"
 Audio files persist in `.motion` format and play during preview. Audio is not yet included in MP4 export.
 
 ## Timeline Clips
+
+Tracks are stable, persisted timeline rows. Use one `main` track for the gap-free primary sequence, compatible `overlay` tracks above it, and separate `audio` tracks:
+
+```motion
+track main {
+  label "Main Track"
+  role main
+  content primary
+  order 0
+}
+
+track titles {
+  label "Text Overlay"
+  role overlay
+  content text
+  hidden false
+  order 1
+}
+
+track music {
+  label "Music"
+  role audio
+  content audio
+  muted false
+  order 2
+}
+```
+
+`hidden` suppresses a visual track without deleting it. `muted` disables track audio while retaining clip-level volume/mute. Higher overlay order renders above lower visual tracks. Existing projects with numeric clip tracks remain compatible and receive synthesized runtime roles until edited.
 
 ```motion
 import "/assets/my-project/video.mp4" as bgVideo
@@ -68,9 +121,17 @@ clip bgVideo {
 }
 ```
 
-Timeline clips reference imported assets (images, SVGs, videos). They appear on the timeline and can be created visually by dragging from the Assets panel.
+Timeline clips reference imported assets (images, SVGs, MP4, and WebM). They appear on the timeline and can be created visually by dragging from the Assets panel. Video frames are decoded by the browser, drawn through the same Canvas renderer as images, and synchronized from `trimIn + (projectTime - start)` during playback, scrubbing, and export.
+
+Video limitations:
+
+- Codec support follows the current browser (typically H.264/AAC MP4 and VP8/VP9 WebM where available).
+- Video clip audio is currently muted; use the project `audio` track for exported sound.
+- Two simultaneous clips referencing the same imported video cannot display different source times yet; import the file under two aliases as a workaround.
+- Embedded video uploads increase `.motion` file size and are limited to 100 MB in the editor.
 
 Properties:
+
 - `track`: timeline track number (default 1)
 - `start`: when clip starts on timeline
 - `duration`: how long clip plays
@@ -80,6 +141,30 @@ Properties:
 - `mute`: whether to mute clip audio (optional, default false)
 
 Clips are rendered at their natural size unless transformed. Keep original asset files in the same location for projects to reload correctly.
+
+### Clip Transitions
+
+Drag **Crossfade** from Effects → Clip Transitions onto the cut between two touching clips on the same track. The transition is saved on both sides of the cut:
+
+```motion
+clip outgoing {
+  track 1
+  start 0s
+  duration 3s
+  transitionOut crossfade
+  transitionOutDuration 500ms
+}
+
+clip incoming {
+  track 1
+  start 3s
+  duration 3s
+  transitionIn crossfade
+  transitionInDuration 500ms
+}
+```
+
+The outgoing clip fades out while the incoming clip fades in. Select the transition marker on the timeline to change its duration or remove it. Paired transition properties should use the same type and duration; normal visual editing writes both sides automatically.
 
 ## Text
 

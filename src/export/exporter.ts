@@ -6,7 +6,7 @@
 import { evaluateScene } from '../animation/evaluator';
 import { GifEncoder } from './gif-encoder';
 import { CanvasRenderer } from '../render/canvas-renderer';
-import type { LoadedAsset } from '../assets/asset-loader';
+import { synchronizeVideoAssets, type LoadedAsset } from '../assets/asset-loader';
 import type { Scene, Animation, Element, Keyframe } from '../types/scene';
 import type { ExportFormat, ExportSupport } from '../types/export';
 
@@ -153,7 +153,9 @@ async function exportGif(options: {
 
   for (let frame = 0; frame <= totalFrames; frame += 1) {
     const time = Math.min(scaledScene.canvas.duration, frame / fps);
-    renderer.render(evaluateScene(scaledScene, time), assets);
+    const evaluated = evaluateScene(scaledScene, time);
+    await synchronizeVideoAssets(evaluated, assets, { playing: false, exact: true });
+    renderer.render(evaluated, assets);
     const ctx = (renderer as unknown as { context: CanvasRenderingContext2D }).context;
     encoder.addFrame(ctx.getImageData(0, 0, width, height));
     onProgress?.(frame / totalFrames);
@@ -190,7 +192,9 @@ async function renderTimeline(options: {
 
   for (let frame = 0; frame <= totalFrames; frame += 1) {
     const time = Math.min(scene.canvas.duration, frame / fps);
-    renderer.render(evaluateScene(scene, time), assets);
+    const evaluated = evaluateScene(scene, time);
+    await synchronizeVideoAssets(evaluated, assets, { playing: false, exact: true });
+    renderer.render(evaluated, assets);
     onProgress?.(frame / totalFrames);
     await wait(frameDuration);
   }

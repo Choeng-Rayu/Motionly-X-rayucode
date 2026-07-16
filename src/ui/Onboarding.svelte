@@ -112,7 +112,7 @@
         {#if step === 1}
           <div class="title-row"><h1>Welcome to Motionly</h1><span class="beta">Beta</span></div>
           <p class="notice">We're early in beta—you may run into bugs or rough edges. Thanks for being here while we sort them out.</p>
-          <p>Motionly is an AI-native motion graphics editor. AI generates an editable project instead of a finished video, then you refine it visually—drag, scale, tune timing, scrub, and export.</p>
+          <p>Motionly is an AI-native motion graphics editor where AI-assisted workflows create editable animation projects that you can refine visually. Edit timing, assets, animations, and layouts through a timeline and canvas editor before exporting the final result.</p>
           <p>Underneath, every project is a plain, readable <code>.motion</code> file. What AI makes is a starting point you can actually direct.</p>
           <div class="actions end"><button class="primary" type="button" on:click={() => step = 2}>Continue <ArrowRight size={15} /></button></div>
         {:else if step === 2}
@@ -165,8 +165,24 @@
         {:else if step === 4}
           <img class="hero-icon" src={githubIconUrl} alt="" />
           <h1>Build Motionly with us</h1>
-          <p>Motionly is open source. Follow progress, report rough edges, or contribute directly on GitHub.</p>
-          <a class="github" href="https://github.com/COPPSARY/Motionly" target="_blank" rel="noreferrer"><img src={githubIconUrl} alt="" /> Open Motionly on GitHub</a>
+          <p>Motionly is open source. Follow progress, report rough edges, contribute directly on GitHub, or support the launch on Product Hunt.</p>
+          <div class="community-links">
+            <a class="community-link" href="https://github.com/COPPSARY/Motionly" target="_blank" rel="noreferrer"><img src={githubIconUrl} alt="" /> Contribute on GitHub</a>
+            <a
+              class="product-hunt-badge"
+              href="https://www.producthunt.com/products/motionly?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-motionly"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="View Motionly on Product Hunt"
+            >
+              <img
+                alt="Motionly - Motionly is an AI-native motion graphics editor. | Product Hunt"
+                width="250"
+                height="54"
+                src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1197499&amp;theme=dark&amp;t=1784188075155"
+              />
+            </a>
+          </div>
           <div class="actions split"><button class="text-button" type="button" on:click={() => step = 3}>Back</button><button class="primary" type="button" on:click={() => step = 5}>Continue <ArrowRight size={15} /></button></div>
         {:else}
           <img class="final-logo" src={logoUrl} alt="" />
@@ -218,9 +234,9 @@
   .actions { display: flex; align-items: center; margin-top: auto; padding-top: 16px; }
   .actions.end { justify-content: flex-end; }
   .actions.split { justify-content: space-between; }
-  button, .github { font: inherit; }
-  button.primary, .github { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 38px; padding: 0 15px; border: 1px solid #4d8c75; border-radius: 7px; background: #1a3b30; color: #a4f8d5; font-size: 12px; font-weight: 650; cursor: pointer; text-decoration: none; }
-  button.primary:hover, .github:hover { background: #214a3d; }
+  button, .community-link { font: inherit; }
+  button.primary, .community-link { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 38px; padding: 0 15px; border: 1px solid #4d8c75; border-radius: 7px; background: #1a3b30; color: #a4f8d5; font-size: 12px; font-weight: 650; cursor: pointer; text-decoration: none; }
+  button.primary:hover, .community-link:hover { background: #214a3d; }
   .text-button, .skip { border: 0; background: transparent; color: #8e939b; font-size: 12px; cursor: pointer; }
   .skip { align-self: center; margin-top: 4px; text-decoration: underline; text-underline-offset: 3px; }
   .skip-note { align-self: center; text-align: center; }
@@ -232,8 +248,10 @@
   .loop { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; padding: 12px; color: #727982; font-size: 10px; text-align: center; }
   .loop span { color: #aeb3ba; }
   .hero-icon { width: 30px; height: 30px; }
-  .github { align-self: flex-start; }
-  .github img { width: 17px; height: 17px; }
+  .community-links { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; align-self: flex-start; }
+  .community-link img { width: 17px; height: 17px; }
+  .product-hunt-badge { display: inline-flex; flex: 0 0 auto; overflow: hidden; border-radius: 7px; line-height: 0; }
+  .product-hunt-badge img { display: block; width: 250px; height: 54px; }
   .final-logo { width: 56px; height: 56px; align-self: center; border-radius: 13px; }
   .final-logo + h1, .final-logo + h1 + p { text-align: center; }
   button.final { align-self: center; margin-top: 14px; }

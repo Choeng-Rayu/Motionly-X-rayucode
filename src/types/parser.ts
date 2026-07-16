@@ -114,6 +114,12 @@ export interface SequenceNode extends BaseNode {
   properties: Record<string, unknown>;
 }
 
+export interface TrackNode extends BaseNode {
+  type: 'Track';
+  name: string;
+  properties: Record<string, unknown>;
+}
+
 /**
  * Audio configuration node
  */
@@ -142,6 +148,7 @@ export type ASTNode =
   | ElementNode
   | AnimationNode
   | SequenceNode
+  | TrackNode
   | AudioNode
   | ClipNode;
 

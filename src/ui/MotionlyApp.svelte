@@ -217,6 +217,20 @@ animate title {
         <img src={logoUrl} alt="Motionly" class="logo" />
       </span>
       <h1>Motionly</h1>
+      <a
+        class="product-hunt-badge"
+        href="https://www.producthunt.com/products/motionly?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-motionly"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="View Motionly on Product Hunt"
+      >
+        <img
+          alt="Motionly - Motionly is an AI-native motion graphics editor. | Product Hunt"
+          width="250"
+          height="54"
+          src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1197499&amp;theme=dark&amp;t=1784188075155"
+        />
+      </a>
     </div>
 
     <div class="file-info">
@@ -360,6 +374,20 @@ animate title {
     letter-spacing: 0;
   }
 
+  .product-hunt-badge {
+    flex: 0 0 auto;
+    display: flex;
+    margin-left: 4px;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .product-hunt-badge img {
+    width: 125px;
+    height: 27px;
+    display: block;
+  }
+
   .file-info {
     display: flex;
     align-items: center;
@@ -469,6 +497,12 @@ animate title {
     height: 18px;
     border-left: 1px solid #34383e;
     padding-left: 7px;
+  }
+
+  @media (max-width: 1120px) {
+    .product-hunt-badge {
+      display: none;
+    }
   }
 
   @media (max-width: 760px) {

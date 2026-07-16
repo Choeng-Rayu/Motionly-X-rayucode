@@ -1,19 +1,31 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { FileImage, Layers3, Maximize2, Minus, Music2, Pause, Play, Plus, RotateCcw, SkipBack, Sparkles, Square, Trash2, Type, Upload, X, FolderOpen, Headphones, Wand2 } from 'lucide-svelte';
+  import { AlignHorizontalJustifyCenter, AlignHorizontalJustifyEnd, AlignHorizontalJustifyStart, AlignVerticalJustifyCenter, AlignVerticalJustifyEnd, AlignVerticalJustifyStart, Eye, EyeOff, FileImage, Layers3, Magnet, Maximize2, Minus, Music2, Pause, Play, Plus, Redo2, Scissors, SkipBack, Sparkles, Square, Trash2, Type, Upload, Video, Volume2, VolumeX, Undo2, X, FolderOpen, Headphones, Wand2 } from 'lucide-svelte';
   import { parseMotion } from '../../language/parser';
   import { buildSceneGraph } from '../../scene/scene-graph';
   import { evaluateScene } from '../../animation/evaluator';
-  import { loadAssets } from '../../assets/asset-loader';
+  import { loadAssets, isLoadedVideo, pauseVideoAssets, synchronizeVideoAssets } from '../../assets/asset-loader';
   import type { LoadedAsset } from '../../assets/asset-loader';
-  import { CanvasRenderer } from '../../render/canvas-renderer';
+  import { CanvasRenderer, hiddenMaskSourceIds } from '../../render/canvas-renderer';
   import { canExport, exportVideo } from '../../export/exporter';
-  import { parsePresetCall } from '../../animation-library/preset-parser';
-  import type { AnimationNode, CameraNode, ClipNode, ElementNode, ProgramNode } from '../../types/parser';
+  import type { AnimationNode, CameraNode, ClipNode, ElementNode, KeyframeNode, ProgramNode, TrackNode } from '../../types/parser';
   import { serializeProgram } from '../../language/serializer';
-  import type { Asset, Clip, Element, EvaluatedElement, EvaluatedScene, Scene } from '../../types/scene';
-  import { packTimelineLanes, type TimelineLane } from '../timeline-lanes';
+  import type { Asset, Clip, Element, EvaluatedElement, EvaluatedScene, Scene, Track } from '../../types/scene';
+  import { combinePersistentTrackRows, packClipTrackLanes, packTimelineLanes, type TimelineLane } from '../timeline-lanes';
+  import { alignRect, snapRect, type Alignment, type SnapGuides } from '../canvas-geometry';
+  import { moveKeyframe, removeKeyframe, seedKeyframes, upsertKeyframe } from '../keyframe-editing';
+  import { splitClip, type ClipTiming } from '../clip-timing';
+  import {
+    adjacentClipBoundaries,
+    applyClipTransition,
+    removedClipTransitionProperties,
+    type ClipTransitionBoundary,
+  } from '../clip-transitions';
+  import { elementWindowProperties, splitElementClip } from '../element-clips';
   import { restoreEmbeddedAssetPaths } from '../../ai/chat';
+  import { createEditorHistory, recordEditorSource, redoEditorSource, undoEditorSource } from '../editor-history';
+  import { allocateOverlayTrack, isTrackCompatible, moveClipToTrack, removeClipFromTracks, trimClipOnTrack } from '../timeline-tracks';
+  import { anchoredTimelineScroll, clampTimelineZoom, quantizeTimelineTime as quantizeFrameTime } from '../timeline-viewport';
   import { appUrl } from '../../app/routing';
   import AiChatPanel from './AiChatPanel.svelte';
 
@@ -36,9 +48,11 @@
   let totalDuration = 5;
   let animationFrameId: number | null = null;
   let dragState:
-    | { mode: 'move'; id: string; offsetX: number; offsetY: number }
+    | { mode: 'move'; id: string; offsetX: number; offsetY: number; startX: number; startY: number }
     | { mode: 'resize'; id: string; centerX: number; centerY: number; startDistance: number; startScale: number }
     | null = null;
+  let snapGuides: SnapGuides = { vertical: null, horizontal: null };
+  let selectedKeyframeOffset: number | null = null;
   let showCodeEditor = false;
   let selectedElementId = '';
   let zoom = 0.42;
@@ -55,20 +69,39 @@
   let exportError = '';
   let assetError = '';
   let activeNavTab: 'media' | 'audio' | 'text' | 'effects' | 'scenes' = 'media';
-  let showAiChat = true;
+  let showAiChat = false;
   let mediaSubTab: 'assets' | 'presets' = 'assets';
   let showConfirmDialog = false;
   let pendingPresetPath = '';
-  let previewAsset: { src: string; width: number; height: number } | null = null;
+  let previewAsset: { src: string; width: number; height: number; type: 'image' | 'video' } | null = null;
+  let videoRenderId = 0;
   let draggingAsset: Element | null = null;
+  let draggingTransition: 'crossfade' | null = null;
+  let selectedTransitionIds: { outgoingId: string; incomingId: string } | null = null;
   let dropTargetTime: number | null = null;
-  let dropTargetTrack: number | string = 1;
+  let dropTargetTrack: number | string = '';
+  let editorHistory = createEditorHistory(code);
+  let timelineScroll: HTMLDivElement;
+  let timelineZoom = 1;
+  let magnetEnabled = true;
+  let historyGestureBase: string | null = null;
 
   interface AnimationPresetDef {
     name: string;
     description: string;
     category: 'text' | 'object' | 'transition' | 'camera';
   }
+
+  const adjustmentControls = [
+    { property: 'blur', label: 'Blur', min: 0, max: 40, step: 0.5, fallback: 0 },
+    { property: 'brightness', label: 'Brightness', min: 0, max: 3, step: 0.01, fallback: 1 },
+    { property: 'contrast', label: 'Contrast', min: 0, max: 3, step: 0.01, fallback: 1 },
+    { property: 'saturation', label: 'Saturation', min: 0, max: 3, step: 0.01, fallback: 1 },
+    { property: 'hue', label: 'Hue', min: -180, max: 180, step: 1, fallback: 0 },
+    { property: 'grayscale', label: 'Grayscale', min: 0, max: 1, step: 0.01, fallback: 0 },
+    { property: 'sepia', label: 'Sepia', min: 0, max: 1, step: 0.01, fallback: 0 },
+    { property: 'invert', label: 'Invert', min: 0, max: 1, step: 0.01, fallback: 0 },
+  ] as const;
 
   const ANIMATION_PRESETS: AnimationPresetDef[] = [
     // Text presets
@@ -119,9 +152,15 @@
     
     // Keyboard handler for Escape to clear preview
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && previewAsset) {
-        clearAssetPreview();
+      const target = e.target as HTMLElement | null;
+      const editing = target?.matches('input, textarea, select, [contenteditable="true"]');
+      if ((e.ctrlKey || e.metaKey) && !editing && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) redoEditor();
+        else undoEditor();
+        return;
       }
+      if (e.key === 'Escape' && previewAsset) clearAssetPreview();
     };
     window.addEventListener('keydown', handleKeyDown);
     
@@ -131,6 +170,37 @@
       window.removeEventListener('keydown', handleKeyDown);
     };
   });
+
+  function beginHistoryGesture() {
+    if (historyGestureBase === null) historyGestureBase = editorHistory.present;
+  }
+
+  function endHistoryGesture() {
+    if (historyGestureBase === null) return;
+    const finalSource = editorHistory.present;
+    const baseSource = historyGestureBase;
+    historyGestureBase = null;
+    editorHistory = recordEditorSource(
+      { ...editorHistory, present: baseSource },
+      finalSource
+    );
+  }
+
+  function undoEditor() {
+    const previous = undoEditorSource(editorHistory);
+    if (previous === editorHistory) return;
+    pause();
+    editorHistory = previous;
+    code = previous.present;
+  }
+
+  function redoEditor() {
+    const next = redoEditorSource(editorHistory);
+    if (next === editorHistory) return;
+    pause();
+    editorHistory = next;
+    code = next.present;
+  }
 
   function requestPresetLoad(presetPath: string) {
     pendingPresetPath = presetPath;
@@ -180,6 +250,11 @@
   }
 
   $: if (code) {
+    if (code !== editorHistory.present) {
+      editorHistory = historyGestureBase === null
+        ? recordEditorSource(editorHistory, code)
+        : { ...editorHistory, present: code, future: [] };
+    }
     parseAndRender();
   }
 
@@ -189,20 +264,43 @@
   $: selectedAnimation =
     scene?.animations.find((animation) => animation.target === selectedElement?.id) ?? null;
   $: sourceElements = scene?.elements.filter((element) => !element.id.includes('__')) ?? [];
-  $: timelineRows = packTimelineLanes(sourceElements, timelineRange);
-  $: timelineClipTracks = groupClipsByTrack(scene?.clips ?? []);
+  $: allTimelineRows = packTimelineLanes(sourceElements, timelineRange);
+  $: combinedTimelineRows = combinePersistentTrackRows(
+    packClipTrackLanes(scene?.clips ?? [], scene?.tracks ?? []),
+    allTimelineRows
+  );
+  $: timelineRows = combinedTimelineRows.elementLanes;
+  $: timelineClipTracks = combinedTimelineRows.clipTracks;
+  $: defaultMainTrack = scene?.tracks.find((track) => track.role === 'main')?.id ?? 'main';
+  $: projectAudioTrack = scene?.tracks.find((track) => track.role === 'audio') ?? null;
+  $: transitionBoundaries = adjacentClipBoundaries(
+    scene?.clips ?? [],
+    1 / (scene?.canvas.fps ?? 60)
+  );
+  $: selectedTransition = selectedTransitionIds
+    ? transitionBoundaries.find(
+        (boundary) =>
+          boundary.outgoing.id === selectedTransitionIds?.outgoingId &&
+          boundary.incoming.id === selectedTransitionIds?.incomingId &&
+          boundary.type !== null
+      ) ?? null
+    : null;
   $: timelineTicks = Array.from({ length: 7 }, (_, index) => (totalDuration * index) / 6);
   $: displayFrame = Math.round(currentTime * (scene?.canvas.fps ?? 60));
   $: assistantAssets = mergeAssets(scene?.imports ?? [], embeddedAssets);
   $: canvasWidth = scene?.canvas.width ?? 1920;
   $: canvasHeight = scene?.canvas.height ?? 1080;
   $: canvasStyle = `width: ${Math.round(canvasWidth * zoom)}px; aspect-ratio: ${canvasWidth} / ${canvasHeight};`;
+  $: timelineContentWidth = Math.max(820, 220 + totalDuration * 100 * timelineZoom);
 
   function parseAndRender() {
     try {
       parseError = null;
       ast = parseMotion(code);
       scene = buildSceneGraph(ast);
+      if (audioElement) {
+        audioElement.muted = scene.tracks.find((track) => track.role === 'audio')?.muted ?? false;
+      }
       rememberEmbeddedAssets(scene.imports);
       totalDuration = scene.canvas.duration;
       currentTime = Math.min(currentTime, totalDuration);
@@ -235,11 +333,26 @@
     }
   }
 
-  function renderFrame(time: number) {
+  function renderFrame(time: number, exactVideoSeek = false) {
     if (!renderer || !scene) return;
-    currentFrame = evaluateScene(scene, time);
-    renderer.render(currentFrame, assets);
-    drawSelection();
+    const frame = evaluateScene(scene, time);
+    currentFrame = frame;
+    const renderId = ++videoRenderId;
+    const draw = () => {
+      if (!renderer || renderId !== videoRenderId) return;
+      renderer.render(frame, assets);
+      drawSelection();
+    };
+    if (exactVideoSeek) {
+      void synchronizeVideoAssets(frame, assets, { playing: false, exact: true })
+        .then(draw)
+        .catch((error) => console.warn('Video seek failed:', error));
+      return;
+    }
+    void synchronizeVideoAssets(frame, assets, { playing: isPlaying }).catch((error) =>
+      console.warn('Video synchronization failed:', error)
+    );
+    draw();
   }
 
   function drawSelection() {
@@ -290,7 +403,7 @@
       const missing = nextScene.imports.filter((asset) => !loaded.has(asset.name));
       assetError = missing.length ? `Could not load ${missing.map((asset) => asset.name).join(', ')}.` : '';
       assetsReady = true;
-      renderFrame(currentTime);
+      renderFrame(currentTime, true);
     } catch (error) {
       console.warn('Asset load failed:', error);
     }
@@ -326,9 +439,9 @@
       const delta = now - lastTime;
       if (delta >= frameTime) {
         if (audioUrl && audioElement && !audioElement.paused && !audioElement.ended) {
-          currentTime = audioElement.currentTime;
+          currentTime = quantizeTimelineTime(audioElement.currentTime);
         } else {
-          currentTime += delta / 1000;
+          currentTime = quantizeTimelineTime(currentTime + delta / 1000);
         }
         
         if (currentTime >= totalDuration) {
@@ -349,6 +462,7 @@
   function pause() {
     isPlaying = false;
     audioElement?.pause();
+    pauseVideoAssets(assets);
     if (animationFrameId) {
       cancelAnimationFrame(animationFrameId);
       animationFrameId = null;
@@ -359,21 +473,25 @@
     pause();
     currentTime = 0;
     syncAudio();
-    renderFrame(currentTime);
+    renderFrame(currentTime, true);
+  }
+
+  function quantizeTimelineTime(time: number): number {
+    return quantizeFrameTime(time, totalDuration, scene?.canvas.fps ?? 60);
   }
 
   function seek(event: Event) {
     pause();
-    currentTime = Number((event.currentTarget as HTMLInputElement).value);
+    currentTime = quantizeTimelineTime(Number((event.currentTarget as HTMLInputElement).value));
     syncAudio();
-    renderFrame(currentTime);
+    renderFrame(currentTime, true);
   }
 
   function setTime(time: number) {
     pause();
-    currentTime = Math.max(0, Math.min(totalDuration, time));
+    currentTime = quantizeTimelineTime(time);
     syncAudio();
-    renderFrame(currentTime);
+    renderFrame(currentTime, true);
   }
 
   function resizeTimeline(event: PointerEvent) {
@@ -448,6 +566,17 @@
     const entries: number[] = [];
     const exits: number[] = [];
     const source = scene.elements.find((element) => element.id === id);
+    const sourceProperties = source ? propertiesOf(source) : {};
+    if (
+      typeof sourceProperties['start'] === 'number' &&
+      typeof sourceProperties['duration'] === 'number'
+    ) {
+      const start = Math.max(0, sourceProperties['start']);
+      return {
+        start,
+        end: Math.min(totalDuration, start + Math.max(0, sourceProperties['duration'])),
+      };
+    }
     if (source && numericProperty(source, 'opacity', 1) > 0) entries.push(0);
 
     for (const animation of scene.animations.filter((item) => targets.has(item.target))) {
@@ -476,22 +605,31 @@
     return totalDuration > 0 ? Math.max(0, Math.min(100, (time / totalDuration) * 100)) : 0;
   }
 
-  function handleAudioSelected(event: Event) {
+  async function handleAudioSelected(event: Event) {
     const file = (event.currentTarget as HTMLInputElement).files?.[0];
-    if (!file) return;
-    if (audioUrl) URL.revokeObjectURL(audioUrl);
-    audioUrl = URL.createObjectURL(file);
+    if (!file || !ast) return;
+    if (file.size > 50 * 1024 * 1024) {
+      assetError = 'Audio files must be 50 MB or smaller.';
+      return;
+    }
+    const dataUrl = await readFileDataUrl(file);
+    if (audioUrl.startsWith('blob:')) URL.revokeObjectURL(audioUrl);
+    audioUrl = dataUrl;
     audioName = file.name;
     audioDuration = 0;
-    if (audioElement) {
-      audioElement.src = audioUrl;
-      audioElement.load();
-    }
+    audioElement.src = audioUrl;
+    audioElement.muted = projectAudioTrack?.muted ?? false;
+    audioElement.load();
+    ast.body = ast.body.filter((node) => node.type !== 'Audio');
+    const insertAt = ast.body.findIndex(
+      (node) => node.type === 'Import' || node.type === 'Track' || node.type === 'Element'
+    );
+    ast.body.splice(insertAt < 0 ? ast.body.length : insertAt, 0, {
+      type: 'Audio',
+      path: dataUrl,
+    });
     audioInput.value = '';
-    
-    // Note: We can't save blob URLs to .motion file
-    // Audio needs to be an actual file path for persistence
-    // For now, audio remains session-only until user saves project with audio path
+    code = serializeProgram(ast);
   }
 
   async function loadAudioFromPath(path: string) {
@@ -502,7 +640,9 @@
       const blob = await response.blob();
       if (audioUrl) URL.revokeObjectURL(audioUrl);
       audioUrl = URL.createObjectURL(blob);
-      audioName = path.substring(path.lastIndexOf('/') + 1);
+      audioName = path.startsWith('data:audio/')
+        ? 'Embedded audio'
+        : path.substring(path.lastIndexOf('/') + 1);
       audioDuration = 0;
       
       if (audioElement) {
@@ -590,12 +730,14 @@
     event.stopPropagation();
     const lane = (event.currentTarget as HTMLElement).closest('.track-lane');
     if (!lane) return;
+    beginHistoryGesture();
     const rect = lane.getBoundingClientRect();
     const update = (pointer: PointerEvent) => {
-      const time = Math.max(0, Math.min(totalDuration, ((pointer.clientX - rect.left) / rect.width) * totalDuration));
-      setClipBoundary(id, edge, time);
+      const raw = ((pointer.clientX - rect.left) / rect.width) * totalDuration;
+      setClipBoundary(id, edge, snapTimelineTime(raw, rect.width, id));
     };
     const stop = () => {
+      endHistoryGesture();
       window.removeEventListener('pointermove', update);
       window.removeEventListener('pointerup', stop);
     };
@@ -606,38 +748,14 @@
   function setClipBoundary(id: string, edge: 'start' | 'end', time: number) {
     if (!ast) return;
     const range = timelineRange(id);
-    const element = ast.body.find((node): node is ElementNode => node.type === 'Element' && node.name === id);
-    const presetKey = element?.properties['animation'] ? 'animation' : element?.properties['textAnimation'] ? 'textAnimation' : null;
-
-    if (element && presetKey) {
-      const preset = parsePresetCall(element.properties[presetKey]);
-      const options = { ...preset.options };
-      if (edge === 'start') options['delay'] = Math.min(time, range.end - 0.1);
-      else {
-        const exitDuration = Number(options['exitDuration'] ?? 0.35);
-        options['exitDuration'] = exitDuration;
-        options['exitAt'] = Math.max(range.start, time - exitDuration);
-      }
-      element.properties[presetKey] = `${preset.name}(${Object.entries(options)
-        .map(([key, value]) => `${key} ${['delay', 'duration', 'stagger', 'exitAt', 'exitDuration'].includes(key) && typeof value === 'number' ? `${Number(value.toFixed(3))}s` : value}`)
-        .join(' ')})`;
-      code = serializeProgram(ast);
-      return;
-    }
-
-    const animations = ast.body.filter((node): node is AnimationNode => node.type === 'Animation' && node.target === id);
-    if (edge === 'start') {
-      const entry = animations.find((animation) => Number(animation.to?.['opacity'] ?? 1) > 0) ?? ensureAnimationNode(ast, id);
-      entry.delay = Math.min(time, range.end - 0.1);
-    } else {
-      let exit = animations.find((animation) => Number(animation.to?.['opacity'] ?? 1) <= 0);
-      if (!exit) {
-        exit = { type: 'Animation', target: id, from: { opacity: 1 }, to: { opacity: 0 }, keyframes: [], easing: 'power2.in' };
-        ast.body.push(exit);
-      }
-      exit.duration = 0.35;
-      exit.delay = Math.max(range.start, time - 0.35);
-    }
+    const element = ast.body.find(
+      (node): node is ElementNode => node.type === 'Element' && node.name === id
+    );
+    if (!element) return;
+    const minimum = 1 / (scene?.canvas.fps ?? 60);
+    const start = edge === 'start' ? Math.min(time, range.end - minimum) : range.start;
+    const end = edge === 'end' ? Math.max(time, range.start + minimum) : range.end;
+    element.properties = elementWindowProperties(element.properties, start, end, minimum);
     code = serializeProgram(ast);
   }
 
@@ -666,6 +784,21 @@
     );
     if (!node) return;
     node.properties = { ...node.properties, [key]: value };
+    code = serializeProgram(ast);
+  }
+
+  function resetElementSize() {
+    if (!ast) return;
+    const targetId = selectedElement?.kind === 'asset' ? selectedElement.id : selectedClip?.assetName;
+    if (!targetId) return;
+    const node = ast.body.find(
+      (item): item is ElementNode => item.type === 'Element' && item.name === targetId
+    );
+    if (!node) return;
+    const properties = { ...node.properties };
+    delete properties['width'];
+    delete properties['height'];
+    node.properties = properties;
     code = serializeProgram(ast);
   }
 
@@ -726,6 +859,8 @@
       id: targetId,
       offsetX: point.x - center.x,
       offsetY: point.y - center.y,
+      startX: numericProperty(target, 'x', 0),
+      startY: numericProperty(target, 'y', 0),
     };
     canvas.setPointerCapture(event.pointerId);
   }
@@ -741,16 +876,52 @@
       return;
     }
     const centered = isCentered(element);
-    const nextX = Math.round(point.x - dragState.offsetX - (centered ? scene.canvas.width / 2 : 0));
-    const nextY = Math.round(point.y - dragState.offsetY - (centered ? scene.canvas.height / 2 : 0));
-    updateElementProperties(element.id, { x: nextX, y: nextY });
+    let nextX = point.x - dragState.offsetX - (centered ? scene.canvas.width / 2 : 0);
+    let nextY = point.y - dragState.offsetY - (centered ? scene.canvas.height / 2 : 0);
+    if (event.shiftKey) {
+      const deltaX = nextX - dragState.startX;
+      const deltaY = nextY - dragState.startY;
+      if (Math.abs(deltaX) >= Math.abs(deltaY)) nextY = dragState.startY;
+      else nextX = dragState.startX;
+    }
+
+    const currentX = numericProperty(element, 'x', 0);
+    const currentY = numericProperty(element, 'y', 0);
+    const currentBounds = elementBounds(element);
+    const proposedBounds = {
+      ...currentBounds,
+      x: currentBounds.x + nextX - currentX,
+      y: currentBounds.y + nextY - currentY,
+    };
+    const others = scene.elements
+      .filter((candidate) => candidate.id !== element.id && !candidate.id.includes('__'))
+      .filter((candidate) => candidate.kind === 'asset' || candidate.kind === 'text')
+      .map(elementBounds);
+    const snapped = event.altKey
+      ? { rect: proposedBounds, guides: { vertical: null, horizontal: null } }
+      : snapRect(proposedBounds, others, scene.canvas, 6 / Math.max(zoom, 0.01));
+    snapGuides = snapped.guides;
+    nextX += snapped.rect.x - proposedBounds.x;
+    nextY += snapped.rect.y - proposedBounds.y;
+    updateElementProperties(element.id, { x: Math.round(nextX), y: Math.round(nextY) });
   }
 
   function handleCanvasPointerUp(event: PointerEvent) {
     dragState = null;
+    snapGuides = { vertical: null, horizontal: null };
     if (canvas.hasPointerCapture(event.pointerId)) {
       canvas.releasePointerCapture(event.pointerId);
     }
+  }
+
+  function alignSelected(alignment: Alignment) {
+    if (!scene || !selectedElement) return;
+    const bounds = elementBounds(selectedElement);
+    const aligned = alignRect(bounds, scene.canvas, alignment);
+    updateElementProperties(selectedElement.id, {
+      x: Math.round(numericProperty(selectedElement, 'x', 0) + aligned.x - bounds.x),
+      y: Math.round(numericProperty(selectedElement, 'y', 0) + aligned.y - bounds.y),
+    });
   }
 
   function pointerToCanvas(event: PointerEvent): { x: number; y: number } {
@@ -763,7 +934,9 @@
 
   function hitTest(x: number, y: number): EvaluatedElement | null {
     if (!currentFrame) return null;
+    const hiddenMasks = hiddenMaskSourceIds(currentFrame.elements);
     const editable = currentFrame.elements
+      .filter((element) => !hiddenMasks.has(element.id))
       .filter((element) => element.kind === 'text' || element.kind === 'asset')
       .filter((element) => numericProperty(element, 'opacity', 1) > 0)
       .reverse();
@@ -775,6 +948,8 @@
   }
 
   function selectElement(id: string, seekToElement = true) {
+    if (id !== selectedElementId) selectedKeyframeOffset = null;
+    selectedTransitionIds = null;
     selectedElementId = id;
     if (seekToElement) setTime(firstVisibleTime(id));
     else renderFrame(currentTime);
@@ -784,7 +959,12 @@
     if (element.kind !== 'asset' || !element.assetName) return;
     const asset = assets.get(element.assetName);
     if (asset) {
-      previewAsset = { src: asset.src, width: asset.width, height: asset.height };
+      previewAsset = {
+        src: asset.src,
+        width: asset.width,
+        height: asset.height,
+        type: isLoadedVideo(asset) ? 'video' : 'image',
+      };
     }
   }
 
@@ -804,7 +984,7 @@
   function handleAssetDragEnd() {
     draggingAsset = null;
     dropTargetTime = null;
-    dropTargetTrack = 1;
+    dropTargetTrack = '';
   }
 
   async function handleAssetUpload(event: Event) {
@@ -813,12 +993,16 @@
     assetError = '';
     const files = Array.from((event.currentTarget as HTMLInputElement).files ?? []);
     for (const file of files) {
-      if (!file.type.startsWith('image/') && !file.name.toLowerCase().endsWith('.svg')) {
-        assetError = `${file.name} is not a supported image or SVG.`;
+      const lowerName = file.name.toLowerCase();
+      const isImage = file.type.startsWith('image/') || lowerName.endsWith('.svg');
+      const isVideo = file.type === 'video/mp4' || file.type === 'video/webm' || /\.(mp4|webm|m4v)$/.test(lowerName);
+      if (!isImage && !isVideo) {
+        assetError = `${file.name} is not a supported image, SVG, MP4, or WebM file.`;
         continue;
       }
-      if (file.size > 10_000_000) {
-        assetError = `${file.name} is larger than 10 MB.`;
+      const maximumSize = isVideo ? 100_000_000 : 10_000_000;
+      if (file.size > maximumSize) {
+        assetError = `${file.name} is larger than ${isVideo ? '100' : '10'} MB.`;
         continue;
       }
       let path = '';
@@ -835,7 +1019,14 @@
       while (used.has(name)) name = `${base}_${suffix++}`;
       program.body.push(
         { type: 'Import', path, name },
-        { type: 'Element', kind: 'asset', name, properties: { center: true, width: 480, layer: 'content' } }
+        {
+          type: 'Element',
+          kind: 'asset',
+          name,
+          properties: isVideo
+            ? { center: true, layer: 'content' }
+            : { center: true, width: 480, layer: 'content' },
+        }
       );
     }
     assetInput.value = '';
@@ -866,6 +1057,45 @@
     dropTargetTrack = track && !Number.isNaN(Number(track)) ? Number(track) : (track || 1);
   }
 
+  function timelineAllocationItems(excludeClipId = '', excludeElementId = '') {
+    const clipItems = (scene?.clips ?? [])
+      .filter((clip) => clip.id !== excludeClipId)
+      .map((clip) => ({
+        trackId: String(clip.track),
+        content: clip.asset?.type === 'video' ? 'video' as const : 'image' as const,
+        start: clip.start,
+        end: clip.start + clip.duration,
+      }));
+    const elementItems = allTimelineRows.flatMap((row) =>
+      row.items.filter((item) => item.element.id !== excludeElementId).map((item) => ({
+        trackId: row.trackId,
+        content: row.kind === 'text' ? 'text' as const : row.kind === 'effect' || row.kind === 'overlay' ? 'effect' as const : item.element.asset?.type === 'video' ? 'video' as const : 'image' as const,
+        start: item.range.start,
+        end: item.range.end,
+      }))
+    );
+    return [...clipItems, ...elementItems];
+  }
+
+  function resolveOverlayPlacement(
+    preferred: Track,
+    content: 'video' | 'image' | 'text' | 'effect',
+    start: number,
+    end: number,
+    excludeClipId = '',
+    excludeElementId = ''
+  ): Track {
+    if (preferred.role !== 'overlay') return preferred;
+    const items = timelineAllocationItems(excludeClipId, excludeElementId);
+    const preferredIsFree = items
+      .filter((item) => item.trackId === preferred.id)
+      .every((item) => item.end <= start || item.start >= end);
+    if (preferredIsFree) return preferred;
+    const allocation = allocateOverlayTrack(scene?.tracks ?? [], items, content, start, end);
+    if (allocation.created) trackNodeFor(allocation.track);
+    return allocation.track;
+  }
+
   function handleTimelineDrop(event: DragEvent) {
     event.preventDefault();
     if (!draggingAsset || !ast || dropTargetTime === null) return;
@@ -873,13 +1103,30 @@
     const assetName = draggingAsset.assetName;
     if (!assetName) return;
     const frame = 1 / (scene?.canvas.fps ?? 60);
-    const duration = Math.min(5, Math.max(frame, totalDuration - dropTargetTime));
+    const loadedAsset = assets.get(assetName);
+    const naturalDuration = isLoadedVideo(loadedAsset) && loadedAsset.motionlyDuration > 0
+      ? loadedAsset.motionlyDuration
+      : 5;
+    const duration = Math.min(naturalDuration, Math.max(frame, totalDuration - dropTargetTime));
     const start = Math.min(dropTargetTime, Math.max(0, totalDuration - duration));
+    const targetId = String(dropTargetTrack || defaultMainTrack);
+    const requestedTrack = scene?.tracks.find((track) => track.id === targetId);
+    const content = draggingAsset.asset?.type === 'video' ? 'video' : 'image';
+    if (!requestedTrack || !isTrackCompatible(requestedTrack, content)) {
+      assetError = `This ${content} cannot be placed on ${requestedTrack?.label ?? 'that track'}.`;
+      return;
+    }
+    const targetTrack = resolveOverlayPlacement(
+      requestedTrack,
+      content,
+      start,
+      start + duration
+    );
     const clipNode: ClipNode = {
       type: 'Clip',
       assetName,
       properties: {
-        track: dropTargetTrack,
+        track: targetId,
         start: `${start.toFixed(3)}s`,
         duration: `${duration.toFixed(3)}s`,
         trimIn: '0s',
@@ -887,16 +1134,74 @@
       },
     };
     ast.body.push(clipNode);
+    if (scene) {
+      const newId = `clip_${assetName}_${scene.clips.length}`;
+      const runtimeClip: Clip = {
+        id: newId,
+        assetName,
+        asset: draggingAsset.asset,
+        track: targetId,
+        start,
+        duration,
+        trimIn: 0,
+        trimOut: 0,
+        transitionInDuration: 0,
+        transitionOutDuration: 0,
+        sourceOrder: scene.clips.length,
+      };
+      const next = moveClipToTrack(
+        [...scene.clips, runtimeClip],
+        newId,
+        targetTrack,
+        start,
+        totalDuration,
+        magnetEnabled,
+        [...scene.tracks, ...(scene.tracks.some((track) => track.id === targetTrack.id) ? [] : [targetTrack])]
+      );
+      if (next) {
+        writeClipLayout(next, false);
+        const inserted = next.find((clip) => clip.id === newId);
+        if (inserted) {
+          clipNode.properties = {
+            ...clipNode.properties,
+            track: inserted.track,
+            start: `${inserted.start.toFixed(3)}s`,
+          };
+        }
+      }
+    }
     code = serializeProgram(ast);
     draggingAsset = null;
     dropTargetTime = null;
-    dropTargetTrack = 1;
+    dropTargetTrack = '';
+  }
+
+  function writeClipLayout(nextClips: Clip[], serialize = true) {
+    if (!ast || !scene) return;
+    for (const current of scene.clips) {
+      const next = nextClips.find((clip) => clip.id === current.id);
+      if (!next) continue;
+      const node = clipNodeAt(scene.clips.findIndex((clip) => clip.id === current.id));
+      if (!node) continue;
+      node.properties = {
+        ...node.properties,
+        track: next.track,
+        start: `${next.start.toFixed(3)}s`,
+        duration: `${next.duration.toFixed(3)}s`,
+        trimIn: `${next.trimIn.toFixed(3)}s`,
+        trimOut: `${next.trimOut.toFixed(3)}s`,
+      };
+    }
+    if (serialize) code = serializeProgram(ast);
   }
 
   function deleteClip(clipId: string) {
     if (!ast || !scene) return;
     const node = clipNodeAt(scene.clips.findIndex((clip) => clip.id === clipId));
     if (!node) return;
+    detachClipTransitions(clipId);
+    const next = removeClipFromTracks(scene.clips, clipId, scene.tracks, magnetEnabled);
+    writeClipLayout(next, false);
     ast.body.splice(ast.body.indexOf(node), 1);
     if (selectedElementId === clipId) selectedElementId = '';
     code = serializeProgram(ast);
@@ -911,36 +1216,420 @@
     return ast.body.filter((node): node is ClipNode => node.type === 'Clip')[sceneIndex] ?? null;
   }
 
+  function detachClipTransitions(clipId: string) {
+    if (!scene) return;
+    const related = transitionBoundaries.filter(
+      (boundary) =>
+        boundary.type !== null &&
+        (boundary.outgoing.id === clipId || boundary.incoming.id === clipId)
+    );
+    const removed = removedClipTransitionProperties();
+    for (const boundary of related) {
+      const outgoingNode = clipNodeAt(
+        scene.clips.findIndex((clip) => clip.id === boundary.outgoing.id)
+      );
+      const incomingNode = clipNodeAt(
+        scene.clips.findIndex((clip) => clip.id === boundary.incoming.id)
+      );
+      if (!outgoingNode || !incomingNode) continue;
+      const outgoingProperties = { ...outgoingNode.properties };
+      const incomingProperties = { ...incomingNode.properties };
+      for (const key of removed.outgoing) delete outgoingProperties[key];
+      for (const key of removed.incoming) delete incomingProperties[key];
+      outgoingNode.properties = outgoingProperties;
+      incomingNode.properties = incomingProperties;
+    }
+    if (related.length > 0) selectedTransitionIds = null;
+  }
+
+  function trackNodeFor(track: Track): TrackNode | null {
+    if (!ast) return null;
+    const existing = ast.body.find(
+      (node): node is TrackNode => node.type === 'Track' && node.name === track.id
+    );
+    if (existing) return existing;
+    const node: TrackNode = {
+      type: 'Track',
+      name: track.id,
+      properties: {
+        label: track.label,
+        role: track.role,
+        content: track.content,
+        hidden: track.hidden,
+        muted: track.muted,
+        order: track.order,
+      },
+    };
+    const firstContent = ast.body.findIndex(
+      (item) => item.type === 'Element' || item.type === 'Clip' || item.type === 'Animation'
+    );
+    ast.body.splice(firstContent < 0 ? ast.body.length : firstContent, 0, node);
+    return node;
+  }
+
+  function updateTrack(track: Track, updates: { hidden?: boolean; muted?: boolean }) {
+    const node = trackNodeFor(track);
+    if (!node || !ast) return;
+    node.properties = { ...node.properties, ...updates };
+    if (track.id === projectAudioTrack?.id && updates.muted !== undefined && audioElement) {
+      audioElement.muted = updates.muted;
+    }
+    code = serializeProgram(ast);
+  }
+
   function updateClip(clipId: string, updates: Record<string, string | number | boolean>) {
     if (!ast || !scene) return;
     const node = clipNodeAt(scene.clips.findIndex((clip) => clip.id === clipId));
     if (!node) return;
+    if (['track', 'start', 'duration'].some((key) => key in updates)) {
+      detachClipTransitions(clipId);
+    }
     node.properties = { ...node.properties, ...updates };
     code = serializeProgram(ast);
   }
 
+  function moveSelectedClipFromInspector(trackId: string, requestedStart: number) {
+    if (!scene || !selectedClip) return;
+    const requestedTrack = scene.tracks.find((track) => track.id === trackId);
+    if (!requestedTrack) return;
+    const content = selectedClip.asset?.type === 'video' ? 'video' : 'image';
+    if (!isTrackCompatible(requestedTrack, content)) return;
+    const targetTrack = resolveOverlayPlacement(
+      requestedTrack,
+      content,
+      requestedStart,
+      requestedStart + selectedClip.duration,
+      selectedClip.id
+    );
+    const allTracks = scene.tracks.some((track) => track.id === targetTrack.id)
+      ? scene.tracks
+      : [...scene.tracks, targetTrack];
+    const next = moveClipToTrack(
+      scene.clips,
+      selectedClip.id,
+      targetTrack,
+      requestedStart,
+      totalDuration,
+      magnetEnabled,
+      allTracks
+    );
+    if (next) writeClipLayout(next);
+  }
+
+  function resizeSelectedClipFromInspector(duration: number) {
+    if (!scene || !selectedClip) return;
+    const requestedEnd = selectedClip.start + Math.max(1 / scene.canvas.fps, duration);
+    const next = trimClipOnTrack(
+      scene.clips,
+      selectedClip.id,
+      'end',
+      requestedEnd,
+      scene.tracks,
+      1 / scene.canvas.fps,
+      magnetEnabled
+    );
+    writeClipLayout(next);
+  }
+
+  function handleTransitionDragStart(event: DragEvent) {
+    draggingTransition = 'crossfade';
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'copy';
+      event.dataTransfer.setData('application/x-motionly-transition', 'crossfade');
+      event.dataTransfer.setData('text/plain', 'Crossfade');
+    }
+  }
+
+  function handleTransitionDragEnd() {
+    draggingTransition = null;
+  }
+
+  function applyTransitionAtBoundary(
+    boundary: ClipTransitionBoundary,
+    duration = boundary.duration || 0.5
+  ) {
+    if (!ast || !scene) return;
+    const transition = applyClipTransition(
+      boundary.outgoing,
+      boundary.incoming,
+      duration,
+      1 / scene.canvas.fps
+    );
+    if (!transition) return;
+    const outgoingNode = clipNodeAt(
+      scene.clips.findIndex((clip) => clip.id === boundary.outgoing.id)
+    );
+    const incomingNode = clipNodeAt(
+      scene.clips.findIndex((clip) => clip.id === boundary.incoming.id)
+    );
+    if (!outgoingNode || !incomingNode) return;
+    outgoingNode.properties = {
+      ...outgoingNode.properties,
+      transitionOut: transition.outgoing.transitionOut,
+      transitionOutDuration: `${transition.duration.toFixed(3)}s`,
+    };
+    incomingNode.properties = {
+      ...incomingNode.properties,
+      transitionIn: transition.incoming.transitionIn,
+      transitionInDuration: `${transition.duration.toFixed(3)}s`,
+    };
+    selectedElementId = '';
+    selectedTransitionIds = {
+      outgoingId: boundary.outgoing.id,
+      incomingId: boundary.incoming.id,
+    };
+    code = serializeProgram(ast);
+  }
+
+  function dropTransition(event: DragEvent, boundary: ClipTransitionBoundary) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!draggingTransition) return;
+    applyTransitionAtBoundary(boundary);
+    draggingTransition = null;
+  }
+
+  function selectTransition(boundary: ClipTransitionBoundary) {
+    if (!boundary.type) {
+      applyTransitionAtBoundary(boundary);
+      return;
+    }
+    selectedElementId = '';
+    selectedTransitionIds = {
+      outgoingId: boundary.outgoing.id,
+      incomingId: boundary.incoming.id,
+    };
+    setTime(boundary.at);
+  }
+
+  function removeSelectedTransition() {
+    if (!ast || !scene || !selectedTransition) return;
+    const outgoingNode = clipNodeAt(
+      scene.clips.findIndex((clip) => clip.id === selectedTransition.outgoing.id)
+    );
+    const incomingNode = clipNodeAt(
+      scene.clips.findIndex((clip) => clip.id === selectedTransition.incoming.id)
+    );
+    if (!outgoingNode || !incomingNode) return;
+    const removed = removedClipTransitionProperties();
+    const outgoingProperties = { ...outgoingNode.properties };
+    const incomingProperties = { ...incomingNode.properties };
+    for (const key of removed.outgoing) delete outgoingProperties[key];
+    for (const key of removed.incoming) delete incomingProperties[key];
+    outgoingNode.properties = outgoingProperties;
+    incomingNode.properties = incomingProperties;
+    selectedTransitionIds = null;
+    code = serializeProgram(ast);
+  }
+
   function moveTimelineClip(event: PointerEvent, clip: Clip) {
+    if (event.button !== 0 || !scene) return;
+    event.preventDefault();
+    event.stopPropagation();
+    selectElement(clip.id, false);
+    const originLane = (event.currentTarget as HTMLElement).closest<HTMLElement>('.track-lane');
+    if (!originLane) return;
+    beginHistoryGesture();
+    detachClipTransitions(clip.id);
+    const originRect = originLane.getBoundingClientRect();
+    const grabTime = ((event.clientX - originRect.left) / originRect.width) * totalDuration;
+    const grabOffset = grabTime - clip.start;
+    const move = (pointer: PointerEvent) => {
+      if (!scene) return;
+      const hit = document.elementFromPoint(pointer.clientX, pointer.clientY) as HTMLElement | null;
+      const lane = hit?.closest<HTMLElement>('.track-lane[data-track]') ?? originLane;
+      const trackId = lane.dataset['track'] ?? String(clip.track);
+      const requestedTrack = scene.tracks.find((track) => track.id === trackId);
+      if (!requestedTrack) return;
+      const rect = lane.getBoundingClientRect();
+      const pointerTime = ((pointer.clientX - rect.left) / rect.width) * totalDuration;
+      const requested = snapTimelineTime(pointerTime - grabOffset, rect.width, clip.id);
+      const content = clip.asset?.type === 'video' ? 'video' : 'image';
+      if (!isTrackCompatible(requestedTrack, content)) return;
+      const targetTrack = resolveOverlayPlacement(
+        requestedTrack,
+        content,
+        requested,
+        requested + clip.duration,
+        clip.id
+      );
+      const allTracks = scene.tracks.some((track) => track.id === targetTrack.id)
+        ? scene.tracks
+        : [...scene.tracks, targetTrack];
+      const next = moveClipToTrack(
+        scene.clips,
+        clip.id,
+        targetTrack,
+        requested,
+        totalDuration,
+        magnetEnabled,
+        allTracks
+      );
+      if (next) writeClipLayout(next);
+    };
+    const stop = () => {
+      endHistoryGesture();
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', stop);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop);
+  }
+
+  function moveTimelineElement(event: PointerEvent, element: Element) {
+    if (event.button !== 0 || !ast || !scene) return;
+    event.preventDefault();
+    event.stopPropagation();
+    selectElement(element.id, false);
+    const node = ast.body.find(
+      (item): item is ElementNode => item.type === 'Element' && item.name === element.id
+    );
+    const originLane = (event.currentTarget as HTMLElement).closest<HTMLElement>('.track-lane');
+    if (!node || !originLane) return;
+    beginHistoryGesture();
+    const range = timelineRange(element.id);
+    const duration = range.end - range.start;
+    const content = element.kind === 'text'
+      ? 'text' as const
+      : element.kind === 'effect' || element.kind === 'overlay'
+        ? 'effect' as const
+        : element.asset?.type === 'video'
+          ? 'video' as const
+          : 'image' as const;
+    let originTrack = scene.tracks.find(
+      (track) => track.id === String(node.properties['track'] ?? '')
+    );
+    if (!originTrack) {
+      const allocation = allocateOverlayTrack(
+        scene.tracks,
+        timelineAllocationItems('', element.id),
+        content,
+        range.start,
+        range.end
+      );
+      originTrack = allocation.track;
+      if (allocation.created) trackNodeFor(originTrack);
+      node.properties = { ...node.properties, track: originTrack.id };
+    }
+    const rect = originLane.getBoundingClientRect();
+    const grabOffset = ((event.clientX - rect.left) / rect.width) * totalDuration - range.start;
+    const move = (pointer: PointerEvent) => {
+      if (!ast || !scene || !originTrack) return;
+      const hit = document.elementFromPoint(pointer.clientX, pointer.clientY) as HTMLElement | null;
+      const lane = hit?.closest<HTMLElement>('.track-lane[data-track]') ?? originLane;
+      const requestedTrack = scene.tracks.find(
+        (track) => track.id === (lane.dataset['track'] ?? originTrack!.id)
+      ) ?? originTrack;
+      if (requestedTrack.role !== 'overlay' || !isTrackCompatible(requestedTrack, content)) return;
+      const laneRect = lane.getBoundingClientRect();
+      const raw = ((pointer.clientX - laneRect.left) / laneRect.width) * totalDuration - grabOffset;
+      const start = Math.min(totalDuration - duration, snapTimelineTime(raw, laneRect.width, element.id));
+      const targetTrack = resolveOverlayPlacement(
+        requestedTrack,
+        content,
+        start,
+        start + duration,
+        '',
+        element.id
+      );
+      if (!scene.tracks.some((track) => track.id === targetTrack.id)) trackNodeFor(targetTrack);
+      node.properties = {
+        ...node.properties,
+        ...elementWindowProperties(node.properties, start, start + duration, 1 / scene.canvas.fps),
+        track: targetTrack.id,
+      };
+      code = serializeProgram(ast);
+    };
+    const stop = () => {
+      endHistoryGesture();
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', stop);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop);
+  }
+
+  function trimTimelineClip(event: PointerEvent, clip: Clip, edge: 'start' | 'end') {
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
     selectElement(clip.id, false);
     const lane = (event.currentTarget as HTMLElement).closest<HTMLElement>('.track-lane');
     if (!lane) return;
+    beginHistoryGesture();
     const rect = lane.getBoundingClientRect();
-    const startX = event.clientX;
-    const startTime = clip.start;
+    const minimum = 1 / (scene?.canvas.fps ?? 60);
     const move = (pointer: PointerEvent) => {
-      const raw = startTime + ((pointer.clientX - startX) / rect.width) * totalDuration;
-      const latestStart = Math.max(0, totalDuration - clip.duration);
-      const next = Math.min(latestStart, snapTimelineTime(raw, rect.width, clip.id));
-      updateClip(clip.id, { start: `${next.toFixed(3)}s` });
+      const raw = ((pointer.clientX - rect.left) / rect.width) * totalDuration;
+      const time = snapTimelineTime(raw, rect.width, clip.id);
+      if (!scene) return;
+      const next = trimClipOnTrack(
+        scene.clips,
+        clip.id,
+        edge,
+        time,
+        scene.tracks,
+        minimum,
+        magnetEnabled
+      );
+      writeClipLayout(next);
     };
     const stop = () => {
+      endHistoryGesture();
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', stop);
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', stop);
+  }
+
+  function splitSelectedClip() {
+    if (!ast || !scene) return;
+    if (selectedClip) {
+      const sceneIndex = scene.clips.findIndex((clip) => clip.id === selectedClip.id);
+      const node = clipNodeAt(sceneIndex);
+      const result = splitClip(selectedClip as ClipTiming, currentTime, 1 / scene.canvas.fps);
+      if (!node || !result) return;
+      detachClipTransitions(selectedClip.id);
+      const [left, right] = result;
+      const originalProperties = { ...node.properties };
+      const timingProperties = (timing: ClipTiming) => ({
+        start: `${timing.start.toFixed(3)}s`,
+        duration: `${timing.duration.toFixed(3)}s`,
+        trimIn: `${timing.trimIn.toFixed(3)}s`,
+        trimOut: `${timing.trimOut.toFixed(3)}s`,
+      });
+      node.properties = { ...originalProperties, ...timingProperties(left) };
+      const rightNode: ClipNode = {
+        type: 'Clip',
+        assetName: node.assetName,
+        properties: { ...originalProperties, ...timingProperties(right) },
+      };
+      ast.body.splice(ast.body.indexOf(node) + 1, 0, rightNode);
+      code = serializeProgram(ast);
+      return;
+    }
+
+    if (!selectedElement) return;
+    const range = timelineRange(selectedElement.id);
+    let rightId = `${selectedElement.id}_split`;
+    let suffix = 2;
+    const names = new Set(
+      ast.body.filter((node): node is ElementNode => node.type === 'Element').map((node) => node.name)
+    );
+    while (names.has(rightId)) rightId = `${selectedElement.id}_split_${suffix++}`;
+    const result = splitElementClip(
+      ast,
+      selectedElement.id,
+      currentTime,
+      range,
+      rightId,
+      1 / scene.canvas.fps
+    );
+    if (!result) return;
+    ast = result.program;
+    selectedElementId = result.rightId;
+    code = serializeProgram(ast);
   }
 
   function timelineTimeAt(clientX: number, rect: DOMRect): number {
@@ -952,12 +1641,13 @@
     const clamped = Math.max(0, Math.min(totalDuration, raw));
     const fps = scene?.canvas.fps ?? 60;
     const frameTime = Math.round(clamped * fps) / fps;
+    if (!magnetEnabled) return frameTime;
     const candidates = [0, totalDuration, currentTime];
     for (const clip of scene?.clips ?? []) {
       if (clip.id === excludeClipId) continue;
       candidates.push(clip.start, clip.start + clip.duration);
     }
-    for (const row of timelineRows) {
+    for (const row of allTimelineRows) {
       for (const item of row.items) candidates.push(item.range.start, item.range.end);
     }
     const nearest = candidates.reduce((best, value) =>
@@ -965,17 +1655,41 @@
     return Math.abs(nearest - clamped) <= (totalDuration * 8) / Math.max(1, width) ? nearest : frameTime;
   }
 
-  function groupClipsByTrack(clips: Clip[]): Array<{ track: number | string; clips: Clip[] }> {
-    const tracks = new Map<number | string, Clip[]>();
-    for (const clip of clips) tracks.set(clip.track, [...(tracks.get(clip.track) ?? []), clip]);
-    return Array.from(tracks, ([track, trackClips]) => ({ track, clips: trackClips }))
-      .sort((a, b) => Number(b.track) - Number(a.track));
+  function setTimelineZoom(nextZoom: number, anchorViewportX?: number) {
+    const oldWidth = timelineScroll?.scrollWidth ?? timelineContentWidth;
+    const viewportWidth = timelineScroll?.clientWidth ?? oldWidth;
+    const anchor = anchorViewportX ?? viewportWidth / 2;
+    const oldScroll = timelineScroll?.scrollLeft ?? 0;
+    timelineZoom = clampTimelineZoom(nextZoom);
+    requestAnimationFrame(() => {
+      if (!timelineScroll) return;
+      timelineScroll.scrollLeft = anchoredTimelineScroll(
+        oldScroll,
+        anchor,
+        oldWidth,
+        timelineScroll.scrollWidth,
+        viewportWidth
+      );
+    });
+  }
+
+  function handleTimelineWheel(event: WheelEvent) {
+    if (!event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    const rect = timelineScroll.getBoundingClientRect();
+    setTimelineZoom(timelineZoom * Math.exp(-event.deltaY * 0.002), event.clientX - rect.left);
+  }
+
+  function timelineTrackDisplayOrder(track: Track | null | undefined): number {
+    if (!track) return 9000;
+    if (track.role === 'overlay') return 1000 - track.order;
+    if (track.role === 'main') return 10_000;
+    return 20_000 + track.order;
   }
 
   function timelineLaneLabel(row: TimelineLane): string {
-    if (row.items.length === 1) return row.items[0].element.id;
     if (row.kind === 'text') return 'Text';
-    if (row.kind === 'asset') return 'Images';
+    if (row.kind === 'asset') return 'Images & video';
     if (row.kind === 'overlay') return 'Scenes';
     return 'Effects';
   }
@@ -1041,6 +1755,112 @@
     return Boolean(propertiesOf(element)['center']);
   }
 
+  function selectedAnimationAst(): AnimationNode | null {
+    if (!ast || !selectedElement) return null;
+    return ast.body.find(
+      (node): node is AnimationNode => node.type === 'Animation' && node.target === selectedElement.id
+    ) ?? null;
+  }
+
+  function selectedKeyframeNodes(): KeyframeNode[] {
+    return selectedAnimationAst()?.keyframes ?? [];
+  }
+
+  function keyframeTime(offset: number): number {
+    return (selectedAnimation?.delay ?? 0) + offset * (selectedAnimation?.duration ?? 1);
+  }
+
+  function capturedKeyframeProperties(keys?: string[]): Record<string, unknown> {
+    const evaluated = currentFrame?.elements.find((element) => element.id === selectedElement?.id);
+    const source = evaluated ? propertiesOf(evaluated) : selectedElement ? propertiesOf(selectedElement) : {};
+    const defaults = ['x', 'y', 'scale', 'rotation', 'opacity', 'blur'];
+    const names = keys?.length ? keys : defaults;
+    return Object.fromEntries(
+      names
+        .filter((key) => typeof source[key] === 'number' || typeof source[key] === 'string')
+        .map((key) => [key, source[key]])
+    );
+  }
+
+  function addKeyframeAtPlayhead() {
+    if (!ast || !selectedElement) return;
+    let node = selectedAnimationAst();
+    if (!node) {
+      const base = capturedKeyframeProperties();
+      node = {
+        type: 'Animation',
+        target: selectedElement.id,
+        from: {},
+        to: {},
+        keyframes: [
+          { offset: 0, properties: { ...base } },
+          { offset: 1, properties: { ...base } },
+        ],
+        delay: 0,
+        duration: totalDuration,
+        easing: 'power3.out',
+      };
+      ast.body.push(node);
+    } else {
+      node.keyframes = seedKeyframes(node.keyframes, node.from, node.to);
+    }
+    const delay = selectedAnimation?.delay ?? Number(node.delay ?? 0);
+    const duration = selectedAnimation?.duration ?? (Number(node.duration ?? totalDuration) || totalDuration);
+    const offset = Math.min(1, Math.max(0, (currentTime - delay) / Math.max(duration, 1e-6)));
+    const propertyKeys = Array.from(
+      new Set((node.keyframes ?? []).flatMap((frame) => Object.keys(frame.properties)))
+    );
+    node.keyframes = upsertKeyframe(
+      node.keyframes ?? [],
+      offset,
+      capturedKeyframeProperties(propertyKeys)
+    );
+    node.from = {};
+    node.to = {};
+    selectedKeyframeOffset = offset;
+    code = serializeProgram(ast);
+  }
+
+  function deleteSelectedKeyframe() {
+    const node = selectedAnimationAst();
+    if (!node || selectedKeyframeOffset === null) return;
+    node.keyframes = removeKeyframe(node.keyframes ?? [], selectedKeyframeOffset);
+    selectedKeyframeOffset = null;
+    code = serializeProgram(ast!);
+  }
+
+  function dragKeyframeMarker(event: PointerEvent, offset: number) {
+    if (event.button !== 0 || !selectedAnimation) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const lane = (event.currentTarget as HTMLElement).closest<HTMLElement>('.track-lane');
+    if (!lane) return;
+    const rect = lane.getBoundingClientRect();
+    let previousOffset = offset;
+    selectedKeyframeOffset = offset;
+    setTime(keyframeTime(offset));
+    const move = (pointer: PointerEvent) => {
+      const raw = ((pointer.clientX - rect.left) / rect.width) * totalDuration;
+      const snappedTime = snapTimelineTime(raw, rect.width);
+      const nextOffset = Math.min(
+        1,
+        Math.max(0, (snappedTime - selectedAnimation.delay) / Math.max(selectedAnimation.duration, 1e-6))
+      );
+      const node = selectedAnimationAst();
+      if (!node) return;
+      node.keyframes = moveKeyframe(node.keyframes ?? [], previousOffset, nextOffset);
+      previousOffset = nextOffset;
+      selectedKeyframeOffset = nextOffset;
+      code = serializeProgram(ast!);
+    };
+    const stop = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', stop);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop);
+  }
+
   function updateAnimationProperty(key: keyof AnimationNode, value: string | number) {
     if (!ast || !selectedElement) return;
     const node = ensureAnimationNode(ast, selectedElement.id);
@@ -1051,6 +1871,15 @@
   function addTextElement() {
     if (!ast) return;
     const name = nextElementName('text');
+    const items = timelineAllocationItems();
+    const allocation = allocateOverlayTrack(
+      scene?.tracks ?? [],
+      items,
+      'text',
+      0,
+      totalDuration
+    );
+    if (allocation.created) trackNodeFor(allocation.track);
     ast.body.push({
       type: 'Element',
       kind: 'text',
@@ -1062,6 +1891,9 @@
         size: 64,
         color: '#ffffff',
         opacity: 1,
+        start: '0s',
+        duration: `${totalDuration.toFixed(3)}s`,
+        track: allocation.track.id,
       },
     });
     selectedElementId = name;
@@ -1246,7 +2078,7 @@
           </div>
           {#if mediaSubTab === 'assets'}
             <div class="panel-header-actions">
-              <input bind:this={assetInput} class="file-input" type="file" accept="image/*,.svg" multiple on:change={handleAssetUpload} />
+              <input bind:this={assetInput} class="file-input" type="file" accept="image/*,video/mp4,video/webm,.svg,.mp4,.webm,.m4v" multiple on:change={handleAssetUpload} />
               <button type="button" class="header-icon-btn" on:click={() => assetInput.click()} title="Upload assets" aria-label="Upload assets">
                 <Upload size={16} />
               </button>
@@ -1296,7 +2128,9 @@
                       on:dragend={handleAssetDragEnd}
                     >
                       <div class="asset-thumbnail">
-                        {#if element.asset?.path}
+                        {#if element.asset?.type === 'video' && element.asset.path}
+                          <video src={assets.get(element.assetName ?? '')?.src ?? element.asset.path} muted playsinline preload="metadata"></video>
+                        {:else if element.asset?.path}
                           <img src={assets.get(element.assetName ?? '')?.src ?? element.asset.path} alt={element.id} />
                         {:else}
                           <FileImage size={24} />
@@ -1412,7 +2246,24 @@
               </div>
             </div>
             <div class="effects-category">
-              <div class="category-title">Transitions</div>
+              <div class="category-title">Clip Transitions</div>
+              <p class="category-hint">Drag onto a cut between two touching clips.</p>
+              <div class="effects-list">
+                <button
+                  type="button"
+                  class="effect-item transition-effect-item"
+                  draggable="true"
+                  title="Fade the outgoing clip into the incoming clip"
+                  on:dragstart={handleTransitionDragStart}
+                  on:dragend={handleTransitionDragEnd}
+                >
+                  <Wand2 size={14} />
+                  <span><strong>Crossfade</strong><small>Fade both clips</small></span>
+                </button>
+              </div>
+            </div>
+            <div class="effects-category">
+              <div class="category-title">Scene Transitions</div>
               <div class="effects-list">
                 {#each ANIMATION_PRESETS.filter(p => p.category === 'transition') as preset}
                   <button type="button" class="effect-item" title={preset.description} disabled={!canApplyLibraryPreset(preset)} on:click={() => applyLibraryPreset(preset)}>
@@ -1487,26 +2338,34 @@
         </div>
       </div>
       <div bind:this={stage} class="stage">
-        <canvas
-          bind:this={canvas}
-          width={canvasWidth}
-          height={canvasHeight}
-          class="preview-canvas"
-          class:dragging={Boolean(dragState)}
-          style={canvasStyle}
-          on:pointerdown={handleCanvasPointerDown}
-          on:pointermove={handleCanvasPointerMove}
-          on:pointerup={handleCanvasPointerUp}
-          on:pointercancel={handleCanvasPointerUp}
-        ></canvas>
+        <div class="canvas-shell" style={canvasStyle}>
+          <canvas
+            bind:this={canvas}
+            width={canvasWidth}
+            height={canvasHeight}
+            class="preview-canvas"
+            class:dragging={Boolean(dragState)}
+            on:pointerdown={handleCanvasPointerDown}
+            on:pointermove={handleCanvasPointerMove}
+            on:pointerup={handleCanvasPointerUp}
+            on:pointercancel={handleCanvasPointerUp}
+          ></canvas>
+          {#if snapGuides.vertical !== null}
+            <span class="snap-guide snap-guide-v" style={`left: ${(snapGuides.vertical / canvasWidth) * 100}%`}></span>
+          {/if}
+          {#if snapGuides.horizontal !== null}
+            <span class="snap-guide snap-guide-h" style={`top: ${(snapGuides.horizontal / canvasHeight) * 100}%`}></span>
+          {/if}
+        </div>
         {#if previewAsset}
-          <button type="button" class="asset-preview-overlay" on:click={clearAssetPreview} aria-label="Close asset preview">
-            <img 
-              src={previewAsset.src} 
-              alt="Asset preview" 
-              style="max-width: 100%; max-height: 100%; object-fit: contain;"
-            />
-          </button>
+          <div class="asset-preview-overlay">
+            {#if previewAsset.type === 'video'}
+              <video src={previewAsset.src} controls autoplay muted playsinline></video>
+            {:else}
+              <img src={previewAsset.src} alt="Asset preview" />
+            {/if}
+            <button type="button" class="asset-preview-close" on:click={clearAssetPreview} aria-label="Close asset preview"><X size={18} /></button>
+          </div>
         {/if}
       </div>
       {#if parseError}
@@ -1518,10 +2377,39 @@
 
     <aside class="properties-panel">
       <div class="panel-title">Properties</div>
-      {#if selectedElement}
+      {#if selectedTransition}
+        <div class="selection-summary transition-summary">
+          <span class="layer-icon"><Wand2 size={15} /></span>
+          <span><strong>Crossfade</strong><small>{selectedTransition.outgoing.assetName} → {selectedTransition.incoming.assetName}</small></span>
+        </div>
+        <div class="property-group">
+          <div class="property-label">Duration</div>
+          <div class="number-input-wrapper">
+            <input
+              class="number-input"
+              type="number"
+              min="0.05"
+              max={Math.min(selectedTransition.outgoing.duration, selectedTransition.incoming.duration)}
+              step="0.05"
+              value={selectedTransition.duration}
+              on:change={(event) => applyTransitionAtBoundary(selectedTransition, Number(event.currentTarget.value))}
+            />
+            <span class="input-suffix">s</span>
+          </div>
+        </div>
+        <div class="transition-pair-copy">
+          <span><small>Outgoing</small><strong>{selectedTransition.outgoing.assetName}</strong></span>
+          <span class="transition-pair-arrow">→</span>
+          <span><small>Incoming</small><strong>{selectedTransition.incoming.assetName}</strong></span>
+        </div>
+        <button type="button" class="timeline-command transition-remove" on:click={removeSelectedTransition}>
+          Remove transition
+        </button>
+      {:else if selectedElement}
         <div class="selection-summary">
           <span class="layer-icon">
-            {#if selectedElement.kind === 'asset' && selectedElement.asset?.path}<img src={assets.get(selectedElement.assetName ?? '')?.src ?? selectedElement.asset.path} alt="" />
+            {#if selectedElement.kind === 'asset' && selectedElement.asset?.type === 'video'}<Video size={15} />
+            {:else if selectedElement.kind === 'asset' && selectedElement.asset?.path}<img src={assets.get(selectedElement.assetName ?? '')?.src ?? selectedElement.asset.path} alt="" />
             {:else if selectedElement.kind === 'text'}<Type size={15} />
             {:else if selectedElement.kind === 'asset'}<FileImage size={15} />
             {:else if selectedElement.kind === 'effect'}<Sparkles size={15} />
@@ -1529,6 +2417,21 @@
           </span>
           <span><strong>{selectedElement.id}</strong><small>{elementDetail(selectedElement)}</small></span>
         </div>
+
+        {#if selectedElement.kind === 'asset' || selectedElement.kind === 'text'}
+          <div class="property-align-toolbar">
+            <span class="property-align-label">Align to canvas</span>
+            <div class="property-align-actions" aria-label="Align selected layer to canvas">
+              <button type="button" on:click={() => alignSelected('left')} title="Align left" aria-label="Align left"><AlignHorizontalJustifyStart size={15} /></button>
+              <button type="button" on:click={() => alignSelected('center-x')} title="Align horizontal center" aria-label="Align horizontal center"><AlignHorizontalJustifyCenter size={15} /></button>
+              <button type="button" on:click={() => alignSelected('right')} title="Align right" aria-label="Align right"><AlignHorizontalJustifyEnd size={15} /></button>
+              <span class="align-divider"></span>
+              <button type="button" on:click={() => alignSelected('top')} title="Align top" aria-label="Align top"><AlignVerticalJustifyStart size={15} /></button>
+              <button type="button" on:click={() => alignSelected('center-y')} title="Align vertical center" aria-label="Align vertical center"><AlignVerticalJustifyCenter size={15} /></button>
+              <button type="button" on:click={() => alignSelected('bottom')} title="Align bottom" aria-label="Align bottom"><AlignVerticalJustifyEnd size={15} /></button>
+            </div>
+          </div>
+        {/if}
         
         <div class="property-group">
           <div class="property-label">Position</div>
@@ -1569,7 +2472,10 @@
 
         {#if selectedElement.kind === 'asset'}
           <div class="property-group">
-          <div class="property-label">Width</div>
+            <div class="property-label-row">
+              <div class="property-label">Width</div>
+              <button type="button" class="property-action" on:click={resetElementSize}>Original size</button>
+            </div>
             <div class="number-input-wrapper">
               <input class="number-input" type="number" min="1" step="1" value={numericProperty(selectedElement, 'width', estimateElementWidth(selectedElement))} on:input={(e) => updateElementProperty('width', Number(e.currentTarget.value))} />
               <span class="input-suffix">px</span>
@@ -1647,6 +2553,86 @@
             <input class="color-input" type="color" value={stringProperty(selectedElement, 'color', '#ffffff')} on:input={(e) => updateElementProperty('color', e.currentTarget.value)} />
           </div>
         {/if}
+
+        <div class="section-title">Layer Mask</div>
+        <div class="property-group">
+          <div class="property-label">Use layer as alpha</div>
+          <select
+            class="text-input mask-select"
+            value={stringProperty(selectedElement, 'mask', 'none')}
+            on:change={(event) => updateElementProperty('mask', event.currentTarget.value)}
+          >
+            <option value="none">None</option>
+            {#each sourceElements.filter((candidate) => candidate.id !== selectedElement?.id) as candidate}
+              <option value={candidate.id}>{candidate.id}</option>
+            {/each}
+          </select>
+        </div>
+        {#if stringProperty(selectedElement, 'mask', 'none') !== 'none'}
+          <label class="toggle-row">
+            <input type="checkbox" checked={Boolean(propertiesOf(selectedElement)['maskInvert'])} on:change={(event) => updateElementProperty('maskInvert', event.currentTarget.checked)} />
+            <span>Invert alpha</span>
+          </label>
+          <label class="toggle-row">
+            <input type="checkbox" checked={Boolean(propertiesOf(selectedElement)['maskVisible'])} on:change={(event) => updateElementProperty('maskVisible', event.currentTarget.checked)} />
+            <span>Show mask layer</span>
+          </label>
+        {/if}
+
+        <div class="section-title">Adjustments</div>
+        {#each adjustmentControls as control}
+          <div class="property-group">
+            <div class="property-label">{control.label}</div>
+            <div class="slider-control">
+              <input
+                class="custom-slider"
+                type="range"
+                min={control.min}
+                max={control.max}
+                step={control.step}
+                value={numericProperty(selectedElement, control.property, control.fallback)}
+                on:input={(event) => updateElementProperty(control.property, Number(event.currentTarget.value))}
+              />
+              <input
+                class="slider-value-input"
+                type="number"
+                min={control.min}
+                max={control.max}
+                step={control.step}
+                value={numericProperty(selectedElement, control.property, control.fallback)}
+                on:input={(event) => updateElementProperty(control.property, Number(event.currentTarget.value))}
+              />
+            </div>
+          </div>
+        {/each}
+
+        <div class="section-title">Keyframes</div>
+        <div class="property-group keyframe-controls">
+          <button type="button" class="timeline-command" on:click={addKeyframeAtPlayhead}>◆ Add at playhead</button>
+          {#if selectedKeyframeOffset !== null}
+            <div class="number-input-wrapper">
+              <input
+                class="number-input"
+                type="number"
+                min="0"
+                max="100"
+                step="0.1"
+                value={Number((selectedKeyframeOffset * 100).toFixed(1))}
+                on:change={(event) => {
+                  const node = selectedAnimationAst();
+                  if (node && selectedKeyframeOffset !== null) {
+                    const next = Math.min(1, Math.max(0, Number(event.currentTarget.value) / 100));
+                    node.keyframes = moveKeyframe(node.keyframes ?? [], selectedKeyframeOffset, next);
+                    selectedKeyframeOffset = next;
+                    code = serializeProgram(ast!);
+                  }
+                }}
+              />
+              <span class="input-suffix">%</span>
+            </div>
+            <button type="button" class="icon-btn danger-btn" on:click={deleteSelectedKeyframe} title="Delete selected keyframe"><Trash2 size={14} /></button>
+          {/if}
+        </div>
 
         <div class="section-title">Animation</div>
         
@@ -1734,33 +2720,67 @@
               </button>
             {/each}
           </div>
+          <input
+            class="text-input easing-input"
+            type="text"
+            value={String(selectedAnimation?.easing ?? 'soft')}
+            placeholder="power3.out or cubic-bezier(...)"
+            on:change={(event) => updateAnimationProperty('easing', event.currentTarget.value)}
+            aria-label="Custom animation easing"
+          />
         </div>
       {:else if selectedClip}
         <div class="selection-summary">
           <span class="layer-icon">
-            {#if selectedClip.asset?.path}<img src={assets.get(selectedClip.assetName)?.src ?? selectedClip.asset.path} alt="" />
+            {#if selectedClip.asset?.type === 'video'}<Video size={15} />
+            {:else if selectedClip.asset?.path}<img src={assets.get(selectedClip.assetName)?.src ?? selectedClip.asset.path} alt="" />
             {:else}<FileImage size={15} />{/if}
           </span>
           <span><strong>{selectedClip.assetName}</strong><small>Timeline clip</small></span>
         </div>
+        <button type="button" class="timeline-command clip-original-size" on:click={resetElementSize}>Original size</button>
         <div class="property-group">
           <div class="property-label">Track</div>
-          <input class="number-input" type="number" min="0" step="1" value={Number(selectedClip.track) || 0} on:input={(event) => updateClip(selectedClip.id, { track: Number(event.currentTarget.value) })} />
+          <select class="text-input" value={String(selectedClip.track)} on:change={(event) => moveSelectedClipFromInspector(event.currentTarget.value, selectedClip.start)}>
+            {#each (scene?.tracks ?? []).filter((track) => track.role !== 'audio' && (track.role === 'main' || track.content === (selectedClip.asset?.type === 'video' ? 'video' : 'image') || track.content === 'mixed')) as track}
+              <option value={track.id}>{track.label} · {track.role}</option>
+            {/each}
+          </select>
         </div>
         <div class="property-group">
           <div class="property-label">Start</div>
           <div class="number-input-wrapper">
-            <input class="number-input" type="number" min="0" max={totalDuration} step="0.01" value={selectedClip.start} on:input={(event) => updateClip(selectedClip.id, { start: `${Number(event.currentTarget.value)}s` })} />
+            <input class="number-input" type="number" min="0" max={totalDuration} step="0.01" value={selectedClip.start} on:change={(event) => moveSelectedClipFromInspector(String(selectedClip.track), Number(event.currentTarget.value))} />
             <span class="input-suffix">s</span>
           </div>
         </div>
         <div class="property-group">
           <div class="property-label">Duration</div>
           <div class="number-input-wrapper">
-            <input class="number-input" type="number" min="0.05" max={totalDuration} step="0.05" value={selectedClip.duration} on:input={(event) => updateClip(selectedClip.id, { duration: `${Math.max(0.05, Number(event.currentTarget.value))}s` })} />
+            <input class="number-input" type="number" min="0.05" max={totalDuration} step="0.05" value={selectedClip.duration} on:change={(event) => resizeSelectedClipFromInspector(Number(event.currentTarget.value))} />
             <span class="input-suffix">s</span>
           </div>
         </div>
+        <div class="property-group">
+          <div class="property-label">Trim In</div>
+          <div class="number-input-wrapper">
+            <input class="number-input" type="number" min="0" step="0.01" value={selectedClip.trimIn} on:input={(event) => updateClip(selectedClip.id, { trimIn: `${Math.max(0, Number(event.currentTarget.value))}s` })} />
+            <span class="input-suffix">s</span>
+          </div>
+        </div>
+        <div class="property-group">
+          <div class="property-label">Trim Out</div>
+          <div class="number-input-wrapper">
+            <input class="number-input" type="number" min="0" step="0.01" value={selectedClip.trimOut} on:input={(event) => updateClip(selectedClip.id, { trimOut: `${Math.max(0, Number(event.currentTarget.value))}s` })} />
+            <span class="input-suffix">s</span>
+          </div>
+        </div>
+        <button
+          type="button"
+          class="timeline-command"
+          disabled={currentTime <= selectedClip.start || currentTime >= selectedClip.start + selectedClip.duration}
+          on:click={splitSelectedClip}
+        >Split at playhead</button>
       {:else}
         <p class="empty">No object selected.</p>
       {/if}
@@ -1804,20 +2824,27 @@
         {#if selectedElement || selectedClip}
           <button class="icon-btn danger-btn" on:click={deleteSelectedElement} title="Delete selected layer"><Trash2 size={14} /></button>
         {/if}
-        <button on:click={() => (zoom = Math.max(0.1, zoom - 0.05))} class="icon-btn" title="Zoom out"><Minus size={15} /></button>
-        <button on:click={fitPreview} class="icon-btn" title="Fit preview"><RotateCcw size={15} /></button>
-        <button on:click={() => (zoom = Math.min(1, zoom + 0.05))} class="icon-btn" title="Zoom in"><Plus size={15} /></button>
+        <button class="icon-btn" on:click={undoEditor} disabled={editorHistory.past.length === 0} title="Undo (Ctrl/Cmd+Z)"><Undo2 size={14} /></button>
+        <button class="icon-btn" on:click={redoEditor} disabled={editorHistory.future.length === 0} title="Redo (Ctrl/Cmd+Shift+Z)"><Redo2 size={14} /></button>
+        <button class="icon-btn" on:click={splitSelectedClip} disabled={!((selectedClip && currentTime > selectedClip.start && currentTime < selectedClip.start + selectedClip.duration) || (selectedElement && currentTime > timelineRange(selectedElement.id).start && currentTime < timelineRange(selectedElement.id).end))} title="Split selected clip at playhead"><Scissors size={14} /></button>
+        <button class="icon-btn" class:active={magnetEnabled} on:click={() => magnetEnabled = !magnetEnabled} title={magnetEnabled ? 'Disable timeline magnet' : 'Enable timeline magnet'}><Magnet size={15} /></button>
+        <button on:click={() => setTimelineZoom(timelineZoom / 1.25)} class="icon-btn" title="Timeline zoom out"><Minus size={15} /></button>
+        <span class="timeline-zoom-value">{Math.round(timelineZoom * 100)}%</span>
+        <button on:click={() => setTimelineZoom(timelineZoom * 1.25)} class="icon-btn" title="Timeline zoom in"><Plus size={15} /></button>
       </div>
     </div>
 
     <div 
+      bind:this={timelineScroll}
       class="timeline-scroll" 
+      style={`--timeline-content-width: ${timelineContentWidth}px`}
       class:drop-target={draggingAsset !== null}
       role="region"
       aria-label="Timeline tracks"
       on:dragover={handleTimelineDragOver}
       on:drop={handleTimelineDrop}
       on:dragleave={() => dropTargetTime = null}
+      on:wheel={handleTimelineWheel}
     >
       <div class="ruler-row">
         <div class="track-label ruler-label">Layers</div>
@@ -1829,29 +2856,45 @@
           {#if dropTargetTime !== null}
             <span class="drop-indicator" style={`left: ${timelinePercent(dropTargetTime)}%`}></span>
           {/if}
-          <input class="timeline-scrubber" type="range" min="0" max={totalDuration} step="0.001" value={currentTime} on:input={seek} aria-label="Timeline scrubber" />
+          <input class="timeline-scrubber" type="range" min="0" max={totalDuration} step={1 / (scene?.canvas.fps ?? 60)} value={currentTime} on:input={seek} aria-label="Timeline scrubber" />
         </div>
       </div>
 
       {#each timelineRows as row}
-        <div class="timeline-row" class:selected={row.items.some((item) => item.element.id === selectedElementId)}>
-          <div class="track-label">
+        {@const rowTrack = scene?.tracks.find((track) => track.id === row.trackId)}
+        <div
+          class="timeline-row"
+          class:selected={row.items.some((item) => item.element.id === selectedElementId)}
+          style={`min-height: ${row.laneCount * 34 + 8}px; order: ${timelineTrackDisplayOrder(rowTrack)}`}
+        >
+          <div class="track-label" class:track-hidden={rowTrack?.hidden}>
             <span class="track-thumb">
-              {#if row.items[0].element.kind === 'asset' && row.items[0].element.asset?.path}<img src={assets.get(row.items[0].element.assetName ?? '')?.src ?? row.items[0].element.asset.path} alt="" />
+              {#if row.items[0].element.kind === 'asset' && row.items[0].element.asset?.type === 'video'}<Video size={12} />
+              {:else if row.items[0].element.kind === 'asset' && row.items[0].element.asset?.path}<img src={assets.get(row.items[0].element.assetName ?? '')?.src ?? row.items[0].element.asset.path} alt="" />
               {:else if row.kind === 'text'}<Type size={12} />
               {:else if row.kind === 'effect'}<Sparkles size={12} />
               {:else}<Square size={12} />{/if}
             </span>
             <span class="track-copy">
               <strong>{timelineLaneLabel(row)}</strong>
-              <small>{row.items.length === 1 ? elementDetail(row.items[0].element) : `${row.items.length} connected clips`}</small>
+              <small>{row.items.length} {row.items.length === 1 ? 'element' : 'elements'}{row.laneCount > 1 ? ` · ${row.laneCount} stacked` : ''}</small>
             </span>
-            <span class="track-time">{formatPreciseTime(row.start)} - {formatPreciseTime(row.end)}</span>
+            {#if rowTrack}
+              <span class="track-controls">
+                <button type="button" class="track-control" class:active={rowTrack.hidden} on:click|stopPropagation={() => updateTrack(rowTrack, { hidden: !rowTrack.hidden })} title={rowTrack.hidden ? 'Show track' : 'Hide track'}>
+                  {#if rowTrack.hidden}<EyeOff size={13} />{:else}<Eye size={13} />{/if}
+                </button>
+              </span>
+            {:else}
+              <span class="track-time">{formatPreciseTime(row.start)} - {formatPreciseTime(row.end)}</span>
+            {/if}
           </div>
-          <div class="track-lane">
+          <div class="track-lane" data-track={rowTrack?.id} style={`min-height: ${row.laneCount * 34 + 7}px`}>
             {#each row.items as item}
-              <span class="clip element-clip" class:selected-clip={item.element.id === selectedElementId} style={`left: ${timelinePercent(item.range.start)}%; width: ${Math.max(0.8, timelinePercent(item.range.end - item.range.start))}%`}>
-                {#if item.element.kind === 'asset' && item.element.asset?.path}
+              <span class="clip element-clip" class:selected-clip={item.element.id === selectedElementId} style={`left: ${timelinePercent(item.range.start)}%; width: ${Math.max(0.8, timelinePercent(item.range.end - item.range.start))}%; top: ${6 + item.lane * 34}px`}>
+                {#if item.element.kind === 'asset' && item.element.asset?.type === 'video'}
+                  <span class="clip-media video-clip-media"><Video size={13} /></span>
+                {:else if item.element.kind === 'asset' && item.element.asset?.path}
                   <span
                     class="clip-media"
                     style={`background-image: url('${assets.get(item.element.assetName ?? '')?.src ?? item.element.asset.path}')`}
@@ -1861,35 +2904,93 @@
                 {:else if item.element.kind === 'overlay'}
                   <span class="clip-color" style={`background: ${stringProperty(item.element, 'fill', '#34404e')}`}></span>
                 {/if}
-                <button type="button" class="clip-select" on:click={() => selectElement(item.element.id, false)} aria-label={`Select ${item.element.id}`}></button>
+                <button type="button" class="clip-select" on:pointerdown={(event) => moveTimelineElement(event, item.element)} on:click={() => selectElement(item.element.id, false)} aria-label={`Select or move ${item.element.id}`}></button>
                 <button type="button" class="trim-handle trim-start" on:pointerdown={(event) => trimElement(event, item.element.id, 'start')} aria-label={`Trim start of ${item.element.id}`}></button>
                 <button type="button" class="trim-handle trim-end" on:pointerdown={(event) => trimElement(event, item.element.id, 'end')} aria-label={`Trim end of ${item.element.id}`}></button>
               </span>
             {/each}
+            {#if row.items.some((item) => item.element.id === selectedElementId)}
+              {#each selectedKeyframeNodes() as frame}
+                <button
+                  type="button"
+                  class="keyframe-marker"
+                  class:selected-keyframe={selectedKeyframeOffset !== null && Math.abs(selectedKeyframeOffset - frame.offset) < 0.000001}
+                  style={`left: ${timelinePercent(keyframeTime(frame.offset))}%; top: ${6 + (row.items.find((item) => item.element.id === selectedElementId)?.lane ?? 0) * 34 + 13.5}px`}
+                  title={`Keyframe ${Math.round(frame.offset * 100)}%`}
+                  aria-label={`Keyframe at ${Math.round(frame.offset * 100)} percent`}
+                  on:pointerdown={(event) => dragKeyframeMarker(event, frame.offset)}
+                ></button>
+              {/each}
+            {/if}
             <span class="playhead" style={`left: ${timelinePercent(currentTime)}%`}></span>
           </div>
         </div>
       {/each}
 
       {#each timelineClipTracks as clipTrack}
-          <div class="timeline-row clip-row" class:selected={clipTrack.clips.some((clip) => clip.id === selectedElementId)}>
-            <div class="track-label">
+          <div class="timeline-row clip-row" class:selected={clipTrack.clips.some(({ clip }) => clip.id === selectedElementId) || clipTrack.elements.some(({ item }) => item.element.id === selectedElementId)} style={`min-height: ${clipTrack.laneCount * 34 + 8}px; order: ${timelineTrackDisplayOrder(clipTrack.metadata)}`}>
+            <div class="track-label" class:track-hidden={clipTrack.metadata?.hidden}>
               <span class="track-thumb">
-                {#if clipTrack.clips[0]?.asset?.path}
-                  <img src={assets.get(clipTrack.clips[0].assetName)?.src ?? clipTrack.clips[0].asset?.path} alt="" />
+                {#if clipTrack.metadata?.role === 'audio'}
+                  <Music2 size={12} />
+                {:else if clipTrack.clips[0]?.clip.asset?.type === 'video'}
+                  <Video size={12} />
+                {:else if clipTrack.clips[0]?.clip.asset?.path}
+                  <img src={assets.get(clipTrack.clips[0].clip.assetName)?.src ?? clipTrack.clips[0].clip.asset?.path} alt="" />
                 {:else}
-                  <FileImage size={12} />
+                  <Layers3 size={12} />
                 {/if}
               </span>
               <span class="track-copy">
-                <strong>Track {clipTrack.track}</strong>
-                <small>{clipTrack.clips.length} {clipTrack.clips.length === 1 ? 'clip' : 'clips'}</small>
+                <strong>{clipTrack.metadata?.label ?? `Legacy Track ${clipTrack.track}`}</strong>
+                <small>{clipTrack.metadata?.role ?? 'overlay'} · {clipTrack.clips.length + clipTrack.elements.length} {clipTrack.clips.length + clipTrack.elements.length === 1 ? 'item' : 'items'}</small>
               </span>
+              {#if clipTrack.metadata}
+                <span class="track-controls">
+                  {#if clipTrack.metadata.role !== 'audio'}
+                    <button type="button" class="track-control" class:active={clipTrack.metadata.hidden} on:click|stopPropagation={() => updateTrack(clipTrack.metadata!, { hidden: !clipTrack.metadata!.hidden })} title={clipTrack.metadata.hidden ? 'Show track' : 'Hide track'} aria-label={clipTrack.metadata.hidden ? 'Show track' : 'Hide track'}>
+                      {#if clipTrack.metadata.hidden}<EyeOff size={13} />{:else}<Eye size={13} />{/if}
+                    </button>
+                  {/if}
+                  {#if clipTrack.metadata.role === 'audio' || clipTrack.metadata.role === 'main' || clipTrack.metadata.content === 'video'}
+                    <button type="button" class="track-control" class:active={clipTrack.metadata.muted} on:click|stopPropagation={() => updateTrack(clipTrack.metadata!, { muted: !clipTrack.metadata!.muted })} title={clipTrack.metadata.muted ? 'Unmute track' : 'Mute track'} aria-label={clipTrack.metadata.muted ? 'Unmute track' : 'Mute track'}>
+                      {#if clipTrack.metadata.muted}<VolumeX size={13} />{:else}<Volume2 size={13} />{/if}
+                    </button>
+                  {/if}
+                </span>
+              {/if}
             </div>
-            <div class="track-lane" data-track={clipTrack.track}>
-              {#each clipTrack.clips as clip}
-                <span class="clip timeline-clip" class:selected-clip={clip.id === selectedElementId} style={`left: ${timelinePercent(clip.start)}%; width: ${Math.max(0.8, timelinePercent(clip.duration))}%`}>
-                  {#if clip.asset?.path}
+            <div class="track-lane" data-track={clipTrack.track} style={`min-height: ${clipTrack.laneCount * 34 + 7}px`}>
+              {#if clipTrack.metadata?.id === projectAudioTrack?.id && audioName}
+                <span class="clip audio-clip" style={`left: 0%; width: ${timelinePercent(Math.min(audioDuration || totalDuration, totalDuration))}%; top: 6px`}>
+                  <span class="clip-text">{audioName}</span>
+                </span>
+              {/if}
+              {#each clipTrack.elements as packedElement}
+                {@const item = packedElement.item}
+                <span class="clip element-clip" class:selected-clip={item.element.id === selectedElementId} style={`left: ${timelinePercent(item.range.start)}%; width: ${Math.max(0.8, timelinePercent(item.range.end - item.range.start))}%; top: ${6 + packedElement.lane * 34}px`}>
+                  {#if item.element.kind === 'asset' && item.element.asset?.type === 'video'}
+                    <span class="clip-media video-clip-media"><Video size={13} /></span>
+                  {:else if item.element.kind === 'asset' && item.element.asset?.path}
+                    <span class="clip-media" style={`background-image: url('${assets.get(item.element.assetName ?? '')?.src ?? item.element.asset.path}')`}></span>
+                  {:else if item.element.kind === 'text'}
+                    <span class="clip-text">{stringProperty(item.element, 'value', item.element.id)}</span>
+                  {:else if item.element.kind === 'overlay'}
+                    <span class="clip-color" style={`background: ${stringProperty(item.element, 'fill', '#34404e')}`}></span>
+                  {:else}
+                    <span class="clip-text">{item.element.id}</span>
+                  {/if}
+                  <button type="button" class="clip-select" on:pointerdown={(event) => moveTimelineElement(event, item.element)} on:click={() => selectElement(item.element.id, false)} aria-label={`Select or move ${item.element.id}`}></button>
+                  <button type="button" class="trim-handle trim-start" on:pointerdown={(event) => trimElement(event, item.element.id, 'start')} aria-label={`Trim start of ${item.element.id}`}></button>
+                  <button type="button" class="trim-handle trim-end" on:pointerdown={(event) => trimElement(event, item.element.id, 'end')} aria-label={`Trim end of ${item.element.id}`}></button>
+                </span>
+              {/each}
+              {#each clipTrack.clips as packedClip}
+                {@const clip = packedClip.clip}
+                <span class="clip timeline-clip" class:selected-clip={clip.id === selectedElementId} style={`left: ${timelinePercent(clip.start)}%; width: ${Math.max(0.8, timelinePercent(clip.duration))}%; top: ${6 + packedClip.lane * 34}px`}>
+                  {#if clip.asset?.type === 'video'}
+                    <span class="clip-media video-clip-media"><Video size={13} /></span>
+                  {:else if clip.asset?.path}
                     <span
                       class="clip-media"
                       style={`background-image: url('${assets.get(clip.assetName)?.src ?? clip.asset.path}')`}
@@ -1897,26 +2998,39 @@
                   {:else}
                     <span class="clip-text">{clip.assetName}</span>
                   {/if}
+                  {#if clip.trimIn > 0 || clip.trimOut > 0}
+                    <span class="clip-trim-label">↤ {clip.trimIn.toFixed(2)}s · {clip.trimOut.toFixed(2)}s ↦</span>
+                  {/if}
                   <button type="button" class="clip-select" on:pointerdown={(event) => moveTimelineClip(event, clip)} on:click={() => selectElement(clip.id, false)} aria-label={`Select ${clip.assetName} clip`}></button>
+                  <button type="button" class="trim-handle trim-start" on:pointerdown={(event) => trimTimelineClip(event, clip, 'start')} aria-label={`Trim start of ${clip.assetName}`}></button>
+                  <button type="button" class="trim-handle trim-end" on:pointerdown={(event) => trimTimelineClip(event, clip, 'end')} aria-label={`Trim end of ${clip.assetName}`}></button>
                   <button type="button" class="clip-delete" on:click|stopPropagation={() => deleteClip(clip.id)} title="Delete clip">
                     <X size={12} />
                   </button>
                 </span>
+              {/each}
+              {#each transitionBoundaries.filter((boundary) => String(boundary.outgoing.track) === String(clipTrack.track)) as boundary}
+                <button
+                  type="button"
+                  class="transition-cut"
+                  class:has-transition={boundary.type !== null}
+                  class:drop-ready={draggingTransition !== null}
+                  class:selected-transition={selectedTransition?.outgoing.id === boundary.outgoing.id && selectedTransition?.incoming.id === boundary.incoming.id}
+                  style={`left: ${timelinePercent(boundary.at)}%`}
+                  title={boundary.type ? `Crossfade · ${boundary.duration.toFixed(2)}s` : 'Drop a transition here'}
+                  aria-label={boundary.type ? `Select crossfade between ${boundary.outgoing.assetName} and ${boundary.incoming.assetName}` : `Add transition between ${boundary.outgoing.assetName} and ${boundary.incoming.assetName}`}
+                  on:dragover|preventDefault|stopPropagation
+                  on:drop={(event) => dropTransition(event, boundary)}
+                  on:click|stopPropagation={() => selectTransition(boundary)}
+                >
+                  {boundary.type ? '×' : '+'}
+                </button>
               {/each}
               <span class="playhead" style={`left: ${timelinePercent(currentTime)}%`}></span>
             </div>
           </div>
       {/each}
 
-      {#if audioName}
-        <div class="timeline-row audio-row">
-          <span class="track-label"><Music2 size={14} /><strong>{audioName}</strong></span>
-          <span class="track-lane">
-            <span class="clip audio-clip" style={`left: 0%; width: ${timelinePercent(Math.min(audioDuration || totalDuration, totalDuration))}%`}></span>
-            <span class="playhead" style={`left: ${timelinePercent(currentTime)}%`}></span>
-          </span>
-        </div>
-      {/if}
     </div>
 
     <audio bind:this={audioElement} on:loadedmetadata={() => (audioDuration = audioElement.duration)}></audio>
@@ -2296,7 +3410,8 @@
     overflow: hidden;
   }
 
-  .asset-thumbnail img {
+  .asset-thumbnail img,
+  .asset-thumbnail video {
     width: 100%;
     height: 100%;
     object-fit: cover;
@@ -2429,6 +3544,13 @@
     letter-spacing: 0.5px;
   }
 
+  .category-hint {
+    margin: -2px 0 2px;
+    color: #686e77;
+    font-size: 10px;
+    line-height: 1.35;
+  }
+
   .effects-list {
     display: flex;
     flex-direction: column;
@@ -2463,6 +3585,17 @@
   .effect-item span {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
+
+  .transition-effect-item {
+    border-color: #315449;
+    background: linear-gradient(135deg, rgba(124, 247, 197, 0.12), rgba(124, 247, 197, 0.03));
+    cursor: grab;
+  }
+
+  .transition-effect-item:active { cursor: grabbing; }
+  .transition-effect-item span { display: flex; flex-direction: column; gap: 2px; }
+  .transition-effect-item strong { color: #e9fff6; font-size: 11px; }
+  .transition-effect-item small { color: #79827f; font-size: 9px; }
 
   /* Dialog */
   .dialog-overlay {
@@ -2770,8 +3903,65 @@
     position: relative;
   }
 
+  .property-align-toolbar {
+    margin: 0 14px 14px;
+    padding: 10px;
+    border: 1px solid #292d33;
+    border-radius: 6px;
+    background: #111317;
+  }
+
+  .property-align-label {
+    display: block;
+    margin-bottom: 8px;
+    color: #7f8791;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .property-align-actions {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr) 1px repeat(3, 1fr);
+    overflow: hidden;
+    border: 1px solid #30353c;
+    border-radius: 5px;
+  }
+
+  .property-align-actions button {
+    min-width: 0;
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-right: 1px solid #30353c;
+    background: #181b20;
+    color: #cbd0d7;
+    cursor: pointer;
+  }
+
+  .property-align-actions button:last-child { border-right: 0; }
+  .property-align-actions button:hover { background: #282d34; color: #7cf7c5; }
+
+  .align-divider {
+    width: 1px;
+    height: 30px;
+    justify-self: center;
+    background: #30353c;
+  }
+
+  .canvas-shell {
+    position: relative;
+    flex: 0 0 auto;
+    height: auto;
+  }
+
   .preview-canvas {
     display: block;
+    width: 100%;
     height: auto;
     max-width: none;
     max-height: none;
@@ -2788,6 +3978,29 @@
     cursor: grabbing;
   }
 
+  .snap-guide {
+    position: absolute;
+    z-index: 5;
+    display: block;
+    background: #ff405f;
+    box-shadow: 0 0 0 1px rgba(255, 64, 95, 0.18);
+    pointer-events: none;
+  }
+
+  .snap-guide-v {
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    transform: translateX(-0.5px);
+  }
+
+  .snap-guide-h {
+    right: 0;
+    left: 0;
+    height: 1px;
+    transform: translateY(-0.5px);
+  }
+
   .asset-preview-overlay {
     position: absolute;
     inset: 36px;
@@ -2799,16 +4012,35 @@
     padding: 0;
     backdrop-filter: blur(8px);
     z-index: 100;
-    cursor: pointer;
+    cursor: default;
     border-radius: 4px;
   }
 
-  .asset-preview-overlay img {
+  .asset-preview-overlay img,
+  .asset-preview-overlay video {
     max-width: 100%;
     max-height: 100%;
     object-fit: contain;
     border-radius: 4px;
   }
+
+  .asset-preview-close {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #3a3f46;
+    border-radius: 6px;
+    background: rgba(17, 19, 23, 0.9);
+    color: #fff;
+    cursor: pointer;
+  }
+
+  .asset-preview-close:hover { background: #292e35; }
 
   /* Properties Panel Controls */
   .property-group {
@@ -2824,6 +4056,52 @@
     letter-spacing: 0.5px;
     margin-bottom: 8px;
   }
+
+  .property-label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+
+  .property-label-row .property-label { margin-bottom: 0; }
+
+  .property-action {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: #7cf7c5;
+    font-size: 10px;
+    cursor: pointer;
+  }
+
+  .property-action:hover { color: #b8ffe4; text-decoration: underline; }
+
+  .clip-original-size { width: 100%; margin-bottom: 14px; }
+
+  .transition-pair-copy {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 16px;
+    padding: 10px;
+    border: 1px solid #2a2d33;
+    border-radius: 5px;
+    background: #121417;
+  }
+
+  .transition-pair-copy > span:not(.transition-pair-arrow) {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .transition-pair-copy small { color: #727983; font-size: 9px; text-transform: uppercase; }
+  .transition-pair-copy strong { overflow: hidden; color: #e8ebef; font-size: 11px; text-overflow: ellipsis; }
+  .transition-pair-arrow { color: #7cf7c5; }
+  .transition-remove { width: 100%; color: #ff9d9d; }
 
   .property-row {
     display: grid;
@@ -3256,6 +4534,9 @@
   .timeline-scroll {
     flex: 1;
     min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
     overflow: auto;
     scrollbar-width: thin;
     scrollbar-color: #34373d #0d0e10;
@@ -3264,13 +4545,14 @@
   .ruler-row,
   .timeline-row {
     width: 100%;
-    min-width: 820px;
+    min-width: var(--timeline-content-width, 820px);
     display: grid;
     grid-template-columns: 220px minmax(600px, 1fr);
   }
 
   .ruler-row {
     position: sticky;
+    order: -10000;
     top: 0;
     z-index: 4;
     height: 30px;
@@ -3354,6 +4636,12 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+
+  .track-controls { margin-left: auto; display: flex; align-items: center; gap: 2px; }
+  .track-control { width: 24px; height: 24px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 4px; background: transparent; color: #737a83; cursor: pointer; }
+  .track-control:hover { color: #dce1e6; background: #202329; }
+  .track-control.active { color: #f0b26d; }
+  .track-label.track-hidden .track-copy { opacity: .55; }
 
   .track-time {
     margin-left: auto;
@@ -3451,9 +4739,64 @@
     background: rgba(124, 247, 197, 0.1);
   }
 
+  .clip-trim-label {
+    position: absolute;
+    z-index: 1;
+    right: 22px;
+    bottom: 2px;
+    left: 4px;
+    overflow: hidden;
+    color: rgba(255, 255, 255, 0.82);
+    font-size: 8px;
+    line-height: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
   .timeline-clip.selected-clip {
     border-color: #f1f2f4;
     box-shadow: 0 0 0 1px #7cf7c5;
+  }
+
+  .transition-cut {
+    position: absolute;
+    z-index: 6;
+    top: 10px;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: 1px solid #515860;
+    border-radius: 4px;
+    background: #15181c;
+    color: #9ba1a9;
+    font-size: 12px;
+    line-height: 14px;
+    cursor: pointer;
+    transform: translateX(-50%);
+    transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .transition-cut.has-transition {
+    border-color: #7cf7c5;
+    background: #1c4a3d;
+    color: #ecfff7;
+    box-shadow: 0 0 0 2px rgba(13, 14, 16, 0.85);
+  }
+
+  .transition-cut.drop-ready {
+    width: 22px;
+    height: 22px;
+    top: 7px;
+    border-color: #7cf7c5;
+    background: #243d35;
+    color: #fff;
+    box-shadow: 0 0 12px rgba(124, 247, 197, 0.65);
+  }
+
+  .transition-cut.selected-transition {
+    border-color: #fff;
+    box-shadow: 0 0 0 2px #7cf7c5, 0 0 12px rgba(124, 247, 197, 0.55);
   }
 
   .clip-delete {
@@ -3528,6 +4871,14 @@
     opacity: 0.8;
   }
 
+  .video-clip-media {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #15241f, #17202b);
+    color: #7cf7c5;
+  }
+
   .clip-color {
     opacity: 0.8;
   }
@@ -3590,6 +4941,51 @@
     background: #4e405d;
   }
 
+  .mask-select { min-height: 34px; width: 100%; }
+
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: -2px 0 10px;
+    color: #b6bbc2;
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .toggle-row input { accent-color: #7cf7c5; }
+
+  .keyframe-marker {
+    position: absolute;
+    z-index: 5;
+    top: 50%;
+    width: 10px;
+    height: 10px;
+    padding: 0;
+    border: 1px solid #111318;
+    border-radius: 1px;
+    background: #f4b860;
+    box-shadow: 0 0 0 1px rgba(244, 184, 96, 0.22);
+    transform: translate(-50%, -50%) rotate(45deg);
+    cursor: ew-resize;
+  }
+
+  .keyframe-marker:hover,
+  .keyframe-marker.selected-keyframe {
+    background: #fff1c9;
+    box-shadow: 0 0 0 2px #f4b860;
+  }
+
+  .keyframe-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .keyframe-controls .timeline-command { flex: 1; }
+  .keyframe-controls .number-input-wrapper { width: 84px; }
+  .easing-input { margin-top: 8px; min-height: 32px; }
+
   .playhead {
     position: absolute;
     z-index: 2;
@@ -3599,14 +4995,6 @@
     background: #f1f2f4;
     box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
     pointer-events: none;
-  }
-
-  .audio-row {
-    cursor: default;
-  }
-
-  .audio-row .track-label {
-    cursor: default;
   }
 
   .danger-btn:hover {

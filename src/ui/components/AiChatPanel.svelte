@@ -35,6 +35,8 @@
   let invalidMessageId = '';
   let invalidMotionError = '';
   let hasSavedSettings = false;
+  let composerInput: HTMLTextAreaElement;
+  let messageList: HTMLDivElement;
 
   $: detectedProvider = detectProvider(apiKey);
   $: isKiroKey = apiKey.trim().startsWith('ksk_');
@@ -144,6 +146,8 @@
     const userMessage: AiMessage = { id: crypto.randomUUID(), role: 'user', content };
     messages = [...messages, userMessage];
     draft = '';
+    resizeComposer();
+    scrollToLatest();
     persistHistory();
     sending = true;
     try {
@@ -154,12 +158,29 @@
         content: response,
         motion: extractMotion(response),
       }];
+      scrollToLatest();
       persistHistory();
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'The assistant request failed.';
     } finally {
       sending = false;
     }
+  }
+
+  function resizeComposer() {
+    requestAnimationFrame(() => {
+      if (!composerInput) return;
+      composerInput.style.height = 'auto';
+      const height = Math.min(120, Math.max(38, composerInput.scrollHeight));
+      composerInput.style.height = `${height}px`;
+      composerInput.style.overflowY = composerInput.scrollHeight > 120 ? 'auto' : 'hidden';
+    });
+  }
+
+  function scrollToLatest() {
+    requestAnimationFrame(() => {
+      if (messageList) messageList.scrollTop = messageList.scrollHeight;
+    });
   }
 
   function handleComposerKeydown(event: KeyboardEvent) {
@@ -279,7 +300,7 @@
       </div>
     </div>
   {:else}
-    <div class="message-list" aria-live="polite">
+    <div bind:this={messageList} class="message-list" aria-live="polite">
       {#if messages.length === 0}
         <div class="empty-state">
           <strong>What are we making today?</strong>
@@ -311,7 +332,7 @@
     <div class="composer-wrap">
       {#if error}<p class="error-message">{error}</p>{/if}
       <div class="composer">
-        <textarea rows="2" bind:value={draft} on:keydown={handleComposerKeydown} placeholder="Describe the animation you want..." aria-label="Message Motionly Assistant"></textarea>
+        <textarea bind:this={composerInput} rows="1" bind:value={draft} on:input={resizeComposer} on:keydown={handleComposerKeydown} placeholder="Describe the animation you want..." aria-label="Message Motionly Assistant"></textarea>
         <button type="button" on:click={sendMessage} disabled={!draft.trim() || sending} title="Send message"><Send size={15} /></button>
       </div>
     </div>
@@ -327,7 +348,7 @@
   button { font: inherit; }
   .icon-button { width: 28px; height: 28px; padding: 0; display: grid; place-items: center; border: 1px solid #2a2d33; border-radius: 6px; color: #8e939b; background: #17191c; cursor: pointer; }
   .icon-button:hover, .icon-button.active { color: #7cf7c5; border-color: #355e4f; }
-  .settings-view { flex: 1; overflow: auto; padding: 20px 16px; display: flex; flex-direction: column; gap: 16px; }
+  .settings-view { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #34383e transparent; padding: 20px 16px; display: flex; flex-direction: column; gap: 16px; }
   h3 { margin: 0 0 6px; font-size: 14px; }
   .settings-view > div > p { margin: 0; color: #8e939b; font-size: 12px; line-height: 1.5; }
   .settings-view > div > p code { color: #a9b0b9; font-size: 11px; }
@@ -358,7 +379,12 @@
   .secondary-button { border: 1px solid #2a2d33; background: #17191c; color: #a5aab2; }
   .repair-button { margin-left: 6px; border: 1px solid #59472c; background: #251f17; color: #d9bd85; }
   .secondary-button.danger { margin-right: auto; color: #dc9494; }
-  .message-list { flex: 1; min-height: 0; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .message-list { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-width: none; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .message-list::-webkit-scrollbar { display: none; width: 0; height: 0; }
+  .settings-view::-webkit-scrollbar, .message-list::-webkit-scrollbar, textarea::-webkit-scrollbar { width: 6px; height: 6px; }
+  .settings-view::-webkit-scrollbar-track, .message-list::-webkit-scrollbar-track, textarea::-webkit-scrollbar-track { background: transparent; }
+  .settings-view::-webkit-scrollbar-thumb, .message-list::-webkit-scrollbar-thumb, textarea::-webkit-scrollbar-thumb { border-radius: 999px; background: #34383e; }
+  .settings-view::-webkit-scrollbar-thumb:hover, .message-list::-webkit-scrollbar-thumb:hover, textarea::-webkit-scrollbar-thumb:hover { background: #484d55; }
   .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: #6f747c; font-size: 11px; line-height: 1.5; text-align: center; }
   .empty-state strong { color: #8e939b; font-size: 12px; font-weight: 500; }
   .empty-state span { max-width: 230px; }
@@ -370,12 +396,14 @@
   .message-role { margin-bottom: 6px; color: #7cf7c5; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
   .message.user .message-role { color: #9ca3af; }
   .message p { margin: 0; color: #c8cbd0; font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
-  pre { max-height: 220px; margin: 9px 0; padding: 10px; overflow: auto; border: 1px solid #25282d; border-radius: 6px; background: #0d0e10; color: #b9e8d7; font: 10px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
+  pre { margin: 9px 0; padding: 10px; overflow: visible; border: 1px solid #25282d; border-radius: 6px; background: #0d0e10; color: #b9e8d7; font: 10px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
   .thinking { color: #777d86; font-size: 11px; }
   .composer-wrap { padding: 10px 12px 12px; border-top: 1px solid #1c1d20; background: #0d0e10; }
   .composer-wrap .error-message { margin-bottom: 8px; }
   .composer { display: flex; align-items: flex-end; gap: 7px; padding: 7px; border: 1px solid #2a2d33; border-radius: 10px; background: #17191c; }
-  textarea { min-height: 38px; max-height: 110px; padding: 4px; resize: vertical; border: 0; background: transparent; font-size: 12px; line-height: 1.4; }
-  .composer button { flex: 0 0 auto; width: 30px; height: 30px; display: grid; place-items: center; padding: 0; border: 1px solid #4d8c75; border-radius: 7px; background: #1a3b30; color: #9af8d1; cursor: pointer; }
-  .composer button:disabled { border-color: #2a2d33; background: #1c1e21; color: #5b6068; cursor: default; }
+  textarea { min-height: 38px; max-height: 120px; padding: 4px; resize: none; overflow-y: hidden; scrollbar-width: thin; scrollbar-color: #34383e transparent; border: 0; background: transparent; font-size: 12px; line-height: 1.4; }
+  .composer button { flex: 0 0 auto; width: 30px; height: 30px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: transparent; color: #9af8d1; cursor: pointer; transition: color .15s ease, background .15s ease, transform .15s ease; }
+  .composer button:hover:not(:disabled) { background: rgba(124, 247, 197, .1); color: #c4ffe7; transform: translateY(-1px); }
+  .composer button:focus-visible { outline: 2px solid #437263; outline-offset: 1px; }
+  .composer button:disabled { border: 0; background: transparent; color: #4c5158; cursor: default; }
 </style>

@@ -10,6 +10,7 @@ import type {
   ElementNode,
   AnimationNode,
   SequenceNode,
+  TrackNode,
   ASTNode,
   KeyframeNode,
 } from '../types/parser';
@@ -76,4 +77,8 @@ export function createAnimation(
  */
 export function createSequence(name: string, properties: Record<string, unknown>): SequenceNode {
   return { type: 'Sequence', name, properties };
+}
+
+export function createTrack(name: string, properties: Record<string, unknown>): TrackNode {
+  return { type: 'Track', name, properties };
 }

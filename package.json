@@ -1,7 +1,7 @@
 {
   "name": "motionly",
   "version": "1.0.0",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "engines": {
     "node": ">=20.19.0"
@@ -23,6 +23,7 @@
     "prepare": "husky"
   },
   "dependencies": {
+    "@vercel/analytics": "2.0.1",
     "gsap": "^3.15.0",
     "lucide-svelte": "^1.0.1",
     "motion": "^12.42.2",

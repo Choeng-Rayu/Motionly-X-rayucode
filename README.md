@@ -11,7 +11,7 @@
 </table>
 
 <p align="center">
-  <em>AI generates an editable project instead of a finished video.<br/>What AI makes is a starting point you can actually direct.</em>
+  <em>AI-assisted workflows create editable animation projects you can refine visually.<br/>Edit timing, assets, animations, and layouts before exporting the final result.</em>
 </p>
 
 <p align="center">
@@ -50,12 +50,9 @@
 
 ## Overview
 
-Motionly is an AI-native motion graphics editor. AI generates an editable project instead of a finished video, then you refine it visually—drag, scale, tune timing, scrub, and export.
-
-Underneath, every project is a plain, readable `.motion` file. What AI makes is a starting point you can actually direct.
+Motionly is a motion graphics editor where AI-assisted workflows create editable animation projects that you can refine visually. Edit timing, assets, animations, and layouts through a timeline and canvas editor before exporting the final result.
 
 The current focus is the core editing loop: reliable preview, direct manipulation, useful animation presets, clear timeline control, clean serialization, and dependable export.
-
 ---
 
 ## Visual Editor
@@ -80,12 +77,15 @@ Current editor features:
 - Add text, delete layers, resize the timeline, and trim layer ranges
 - Scene, canvas, and timeline selection
 
-**Timeline Clips (New!):**
-- Drag and drop media from Assets panel directly onto timeline
-- Visual timeline clips with thumbnails
-- Create clips at any position with automatic .motion persistence
-- Delete clips with one click
-- Clips render in preview at correct times
+**Timeline Editing:**
+- Persistent Main, Overlay, and Audio track roles saved through `.motion`
+- Gap-free magnetic Main Track with ripple reorder, delete, and trim behavior
+- Compatible overlay allocation: non-overlapping same-purpose clips reuse a track; overlaps stack on another track
+- Horizontal reordering and vertical drag between compatible tracks
+- Playhead-based Split for media, text, images, overlays, and effects
+- Timeline zoom controls plus `Ctrl/Cmd` wheel or trackpad pinch
+- Undo/Redo history and persistent track hide/mute controls
+- Visual media clips with thumbnails and transition markers
 
 **Audio:**
 - Audio defined in `.motion` format (persists with project)
@@ -107,9 +107,11 @@ Current editor features:
 
 Current limits:
 
-- MP4 export runs in real time and does not include audio from clips yet (see AUDIO_EXPORT_LIMITATION.md)
+- MP4/WebM clips use the browser's native codecs and now render decoded frames during preview, scrub, trim, and export
+- Video clip audio is muted and is not mixed into export yet; use the project audio track
+- Two simultaneous clips that reference one video alias cannot seek that decoder to two source times; import a second alias when needed
+- MP4 export runs in real time and does not include audio from video clips yet (see AUDIO_EXPORT_LIMITATION.md)
 - Canvas resolution, aspect ratio, and FPS still come from `.motion`
-- Clip trimming/repositioning UI is basic (delete and re-add for now)
 - WebM, GIF, still-image, and image-sequence export are not exposed yet
 
 ---
@@ -238,6 +240,7 @@ Current product goals:
 - Improve existing animation presets and add a small set of distinct transitions.
 - Add more export formats only after MP4 is dependable.
 - Provide a hosted editor/sandbox without removing local or self-hosted use.
+- Explore optional Remotion and Hyperframe support for code-based composition and rendering workflows while keeping `.motion` as the editable source format.
 - Keep BYOK AI drafting optional, local-first, and compatible with external providers.
 
 See the [Roadmap](ROADMAP.md) for the planned order of work.

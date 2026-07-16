@@ -5,7 +5,7 @@
 
 import type { EvaluatedScene, EvaluatedElement, Canvas, ElementProperties } from '../types/scene';
 import type { BoundingBox } from '../types/export';
-import type { LoadedAsset } from '../assets/asset-loader';
+import { isLoadedVideo, type LoadedAsset } from '../assets/asset-loader';
 
 /**
  * Canvas renderer class
@@ -13,6 +13,8 @@ import type { LoadedAsset } from '../assets/asset-loader';
 export class CanvasRenderer {
   private canvas: HTMLCanvasElement;
   private context: CanvasRenderingContext2D;
+  private maskCanvas: HTMLCanvasElement;
+  private maskContext: CanvasRenderingContext2D;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -21,6 +23,10 @@ export class CanvasRenderer {
       throw new Error('Failed to get 2D rendering context');
     }
     this.context = ctx;
+    this.maskCanvas = canvas.ownerDocument.createElement('canvas');
+    const maskContext = this.maskCanvas.getContext('2d');
+    if (!maskContext) throw new Error('Failed to create mask rendering context');
+    this.maskContext = maskContext;
   }
 
   /**
@@ -29,6 +35,8 @@ export class CanvasRenderer {
   resize(width: number, height: number): void {
     if (this.canvas.width !== width) this.canvas.width = width;
     if (this.canvas.height !== height) this.canvas.height = height;
+    if (this.maskCanvas.width !== width) this.maskCanvas.width = width;
+    if (this.maskCanvas.height !== height) this.maskCanvas.height = height;
   }
 
   /**
@@ -45,20 +53,39 @@ export class CanvasRenderer {
     ctx.fillStyle = canvas.background;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+    const laidOut = layoutGeneratedText(elements);
+    const hiddenMaskSources = hiddenMaskSourceIds(laidOut);
+
     ctx.save();
     applyCamera(ctx, canvas, camera);
-    for (const element of layoutGeneratedText(elements)) {
+    for (const element of laidOut) {
       const props = element.render as unknown as Record<string, unknown>;
-      if (props['layer'] !== 'effects') {
-        drawElement(ctx, canvas, element, assets);
+      if (props['layer'] !== 'effects' && !hiddenMaskSources.has(element.id)) {
+        drawElementWithMask(
+          ctx,
+          canvas,
+          element,
+          laidOut,
+          assets,
+          this.maskCanvas,
+          this.maskContext
+        );
       }
     }
     ctx.restore();
 
-    for (const element of layoutGeneratedText(elements)) {
+    for (const element of laidOut) {
       const props = element.render as unknown as Record<string, unknown>;
-      if (props['layer'] === 'effects') {
-        drawElement(ctx, canvas, element, assets);
+      if (props['layer'] === 'effects' && !hiddenMaskSources.has(element.id)) {
+        drawElementWithMask(
+          ctx,
+          canvas,
+          element,
+          laidOut,
+          assets,
+          this.maskCanvas,
+          this.maskContext
+        );
       }
     }
 
@@ -189,6 +216,59 @@ function applyCamera(
   ctx.translate(-(canvas.width / 2) - x, -(canvas.height / 2) - y);
 }
 
+/** Mask layers are hidden unless their target opts into showing them as normal artwork. */
+export function hiddenMaskSourceIds(elements: EvaluatedElement[]): Set<string> {
+  const hidden = new Set<string>();
+  for (const element of elements) {
+    const props = element.render as unknown as Record<string, unknown>;
+    const mask = String(props['mask'] ?? '');
+    if (mask && mask !== 'none' && props['maskVisible'] !== true) hidden.add(mask);
+  }
+  return hidden;
+}
+
+function drawElementWithMask(
+  ctx: CanvasRenderingContext2D,
+  canvas: Canvas,
+  element: EvaluatedElement,
+  elements: EvaluatedElement[],
+  assets: Map<string, LoadedAsset>,
+  maskCanvas: HTMLCanvasElement,
+  maskContext: CanvasRenderingContext2D
+): void {
+  const props = element.render as unknown as Record<string, unknown>;
+  const maskId = String(props['mask'] ?? '');
+  const maskElement =
+    maskId && maskId !== 'none' ? elements.find((candidate) => candidate.id === maskId) : undefined;
+  if (!maskElement) {
+    drawElement(ctx, canvas, element, assets);
+    return;
+  }
+
+  maskContext.save();
+  maskContext.setTransform(1, 0, 0, 1, 0, 0);
+  maskContext.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+  maskContext.restore();
+
+  maskContext.save();
+  maskContext.setTransform(ctx.getTransform());
+  maskContext.globalAlpha = 1;
+  maskContext.filter = 'none';
+  maskContext.globalCompositeOperation = 'source-over';
+  drawElement(maskContext, canvas, element, assets);
+  maskContext.globalCompositeOperation =
+    props['maskInvert'] === true ? 'destination-out' : 'destination-in';
+  drawElement(maskContext, canvas, maskElement, assets);
+  maskContext.restore();
+
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = 1;
+  ctx.filter = 'none';
+  ctx.drawImage(maskCanvas, 0, 0);
+  ctx.restore();
+}
+
 /**
  * Draw element to canvas
  */
@@ -206,7 +286,7 @@ function drawElement(
   ctx.save();
   ctx.globalAlpha = opacity;
 
-  const filter = buildFilter(props);
+  const filter = buildCanvasFilter(props);
   if (filter !== 'none') {
     ctx.filter = filter;
   }
@@ -239,6 +319,7 @@ function drawAsset(
 
   const asset = assets.get(assetName);
   if (!asset) return;
+  if (isLoadedVideo(asset) && asset.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
 
   const box = resolveBox(canvas, asset, props);
   drawShadow(ctx, props);
@@ -698,17 +779,35 @@ function resolveBox(
 /**
  * Build CSS filter string
  */
-function buildFilter(props: Record<string, unknown>): string {
-  const filters: string[] = [];
-  const blur = props['blur'] as number | undefined;
-  const brightness = props['brightness'] as number | undefined;
+function finiteNumber(value: unknown, fallback: number): number {
+  const number = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
 
-  if (blur) {
-    filters.push(`blur(${blur}px)`);
-  }
-  if (brightness !== undefined && brightness !== 1) {
-    filters.push(`brightness(${brightness})`);
-  }
+function bounded(value: unknown, fallback: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, finiteNumber(value, fallback)));
+}
+
+/** Build the deterministic Canvas 2D filter string for an evaluated element. */
+export function buildCanvasFilter(props: Record<string, unknown>): string {
+  const filters: string[] = [];
+  const blur = bounded(props['blur'], 0, 0, 100);
+  const brightness = bounded(props['brightness'], 1, 0, 10);
+  const contrast = bounded(props['contrast'], 1, 0, 10);
+  const saturation = bounded(props['saturation'], 1, 0, 10);
+  const hue = finiteNumber(props['hue'], 0);
+  const grayscale = bounded(props['grayscale'], 0, 0, 1);
+  const sepia = bounded(props['sepia'], 0, 0, 1);
+  const invert = bounded(props['invert'], 0, 0, 1);
+
+  if (blur !== 0) filters.push(`blur(${blur}px)`);
+  if (brightness !== 1) filters.push(`brightness(${brightness})`);
+  if (contrast !== 1) filters.push(`contrast(${contrast})`);
+  if (saturation !== 1) filters.push(`saturate(${saturation})`);
+  if (hue !== 0) filters.push(`hue-rotate(${hue}deg)`);
+  if (grayscale !== 0) filters.push(`grayscale(${grayscale})`);
+  if (sepia !== 0) filters.push(`sepia(${sepia})`);
+  if (invert !== 0) filters.push(`invert(${invert})`);
 
   return filters.length ? filters.join(' ') : 'none';
 }

@@ -63,18 +63,19 @@ The right panel edits the selected layer without requiring source changes.
 
 ## Timeline
 
-The lower panel contains playback and clip timing.
+The lower panel contains playback and role-based clip editing.
 
-- Reset, Play/Pause, timecode, and frame display
-- Scrubbable ruler and playhead
-- One clip row per scene, text, media, or effect layer
-- **Timeline clips with thumbnails** for dragged assets
-- Media thumbnails and text labels inside clips
-- Start and end trim handles
-- Click X button to delete clips
-- Resizable panel height
-- Audio playback synchronized with preview
-- Delete selected layer and preview zoom controls
+- Persistent overlay tracks appear above the gap-free Main Track; audio tracks appear below it.
+- Compatible non-overlapping clips reuse a purpose track, while real overlaps create another overlay.
+- Scrubbable ruler and frame-accurate playhead anchor Split and trim operations.
+- Drag clips horizontally to reorder/time them and vertically between compatible tracks.
+- Trim handles work for media, text, images, overlays, and effects.
+- Magnet toggles clip-edge/playhead snapping and Main Track ripple behavior.
+- Undo/Redo buttons and standard keyboard shortcuts restore serialized `.motion` snapshots.
+- Timeline `−`/`+` controls and `Ctrl/Cmd` + wheel/pinch zoom around the pointer.
+- Eye and speaker controls persist track visibility and mute state.
+- Dragging Assets creates thumbnail clips and writes track/timing metadata automatically.
+- The panel divider remains vertically resizable.
 
 ## `.motion` Source
 

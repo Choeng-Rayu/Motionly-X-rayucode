@@ -77,6 +77,13 @@ Motionly's priority is a simple, reliable visual editor for `.motion`. Roadmap i
 - [x] Document the in-app assistant and `.agents/skills/write-motionly` workflow
 - [ ] Add optional asset uploads directly from the chat composer
 
+## Future: Code-Based Workflow Integrations
+
+- [ ] Add optional Remotion and Hyperframe support for code-based composition and rendering workflows
+- [ ] Define adapters or export paths without requiring code-first tools for normal Motionly editing
+- [ ] Keep `.motion` as the canonical editable project format across integrations
+- [ ] Prototype rendering handoffs only after the core editor and export pipeline are dependable
+
 ## Later, Not Near-Term
 
 - Node graphs
@@ -86,4 +93,4 @@ Motionly's priority is a simple, reliable visual editor for `.motion`. Roadmap i
 - Multi-user real-time collaboration
 - Training or hosting a proprietary Motionly model
 
-Last updated: 2026-07-15
+Last updated: 2026-07-16
