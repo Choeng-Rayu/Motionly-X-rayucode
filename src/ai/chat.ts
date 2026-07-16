@@ -36,7 +36,7 @@ Mandatory syntax contract:
 - Put every block body on multiple lines and every property on its own line. Do not use JSON, CSS syntax, colons, semicolons, commas, arrays, or equals signs.
 - Quote text values and import paths. Names and aliases are single words without spaces.
 - Use size, never fontSize. Explicit animate blocks use easing. Preset option lists use ease.
-- Valid common properties: value, center, cover, x, y, width, height, scale, rotation, opacity, blur, brightness, shadow, size, weight, tracking, color, fill, layer, animation, textAnimation, backgroundEffect.
+- Valid common properties: value, center, cover, x, y, width, height, scale, rotation, opacity, blur, brightness, contrast, saturation, hue, grayscale, sepia, invert, mask, maskInvert, maskVisible, shadow, size, weight, tracking, color, fill, layer, animation, textAnimation, backgroundEffect.
 - Valid layers: background, hero, supporting, content, details, text, effects.
 - Preserve asset aspect ratio by setting width OR height, not both.
 - Use only paths listed under Available local assets. Do not invent imports or placeholder paths.

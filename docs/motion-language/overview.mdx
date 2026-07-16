@@ -90,32 +90,45 @@ audio "/assets/my-project/background.mp3"
 
 Audio files persist in `.motion` format and play during preview.
 
-## Timeline Clips
+## Timeline Tracks and Clips
 
 ```motion
+track main {
+  label "Main Track"
+  role main
+  content primary
+  order 0
+}
+
+track titles {
+  label "Text Overlay"
+  role overlay
+  content text
+  hidden false
+  order 1
+}
+
 import "/assets/my-project/video.mp4" as bgVideo
 
 clip bgVideo {
-  track 1
+  track main
   start 0s
   duration 5s
   trimIn 0s
   trimOut 0s
-  volume 1
-  mute false
+}
+
+text title {
+  value "Editable title"
+  track titles
+  start 1s
+  duration 3s
 }
 ```
 
-Clips reference imported assets and appear on the timeline. They can be images, SVGs, or videos. Drag assets from the Assets panel onto the timeline to create clips visually.
+Track roles are `main`, `overlay`, and `audio`. Track content records its purpose (`primary`, `video`, `image`, `text`, `effect`, or `audio`). `hidden` suppresses visual tracks and `muted` disables track audio. `order` persists overlay stacking.
 
-Properties:
-- `track`: timeline track number (default 1)
-- `start`: when clip starts on timeline
-- `duration`: how long clip plays
-- `trimIn`: source media start offset (default 0s)
-- `trimOut`: source media end offset (default 0s)
-- `volume`: audio volume 0-1 (optional, default 1)
-- `mute`: whether to mute clip audio (optional, default false)
+Media clips use `start`, `duration`, `trimIn`, and `trimOut`. Regular text/image/overlay/effect elements use `start` and `duration` as a non-destructive visibility window, so trimming and splitting do not rewrite authored animations. Existing numeric clip tracks remain backward compatible.
 
 ## Easing
 

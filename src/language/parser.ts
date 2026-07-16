@@ -11,6 +11,7 @@ import {
   createImport,
   createProgram,
   createSequence,
+  createTrack,
 } from './ast';
 import { tokenize } from './tokenizer';
 import type {
@@ -28,6 +29,15 @@ const PROPERTY_NAMES = new Set([
   'backgroundEffect',
   'blur',
   'brightness',
+  'contrast',
+  'saturation',
+  'hue',
+  'grayscale',
+  'sepia',
+  'invert',
+  'mask',
+  'maskInvert',
+  'maskVisible',
   'center',
   'color',
   'cover',
@@ -54,6 +64,23 @@ const PROPERTY_NAMES = new Set([
   'size',
   'stroke',
   'tracking',
+  'track',
+  'role',
+  'content',
+  'label',
+  'hidden',
+  'muted',
+  'order',
+  'start',
+  'duration',
+  'trimIn',
+  'trimOut',
+  'volume',
+  'mute',
+  'transitionIn',
+  'transitionInDuration',
+  'transitionOut',
+  'transitionOutDuration',
   'value',
   'weight',
   'width',
@@ -114,6 +141,16 @@ class Parser {
       const path = this.consume('String', 'Expected audio path').value;
       this.skipNewlines();
       return { type: 'Audio', path } as import('../types/parser').AudioNode;
+    }
+
+    if (
+      current.type === 'Word' &&
+      current.value === 'track' &&
+      this.tokens[this.index + 1]?.type === 'Word'
+    ) {
+      this.advance();
+      const name = this.consume('Word', 'Expected track name').value;
+      return createTrack(name, this.parseBlockProperties());
     }
 
     if (this.matchWord('clip')) {
@@ -241,8 +278,11 @@ class Parser {
 
       const key = this.consume('Word', 'Expected property name').value;
 
-      // Boolean properties
-      if (key === 'center' || key === 'cover') {
+      // Bare boolean properties serialize without an explicit `true` value.
+      if (
+        ['center', 'cover', 'maskInvert', 'maskVisible', 'mute', 'hidden', 'muted'].includes(key) &&
+        (this.check('Newline') || this.check('RightBrace'))
+      ) {
         properties[key] = true;
         this.skipNewlines();
         continue;

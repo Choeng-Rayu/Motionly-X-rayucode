@@ -1,29 +1,44 @@
 /**
- * Asset loader for loading images and SVGs
+ * Typed visual asset loading for images, SVGs, and browser-decodable video.
  */
 
-import type { Scene } from '../types/scene';
+import type { AssetType, EvaluatedScene, Scene } from '../types/scene';
 
-export type LoadedAsset = HTMLImageElement & {
-  motionlySvg?: {
-    width: number;
-    height: number;
-    paths: Array<{
-      d: string;
-      stroke: string;
-      strokeWidth: number;
-      opacity: number;
-      lineCap: CanvasLineCap;
-      lineJoin: CanvasLineJoin;
-      length: number;
-    }>;
+export interface MotionlySvgData {
+  width: number;
+  height: number;
+  paths: Array<{
+    d: string;
+    stroke: string;
+    strokeWidth: number;
+    opacity: number;
+    lineCap: CanvasLineCap;
+    lineJoin: CanvasLineJoin;
+    length: number;
+  }>;
+}
+
+interface LoadedAssetMetadata {
+  motionlySvg?: MotionlySvgData;
+  motionlyDuration?: number;
+}
+
+export type LoadedImageAsset = HTMLImageElement &
+  LoadedAssetMetadata & {
+    motionlyType: 'image';
   };
-};
+export type LoadedVideoAsset = HTMLVideoElement &
+  LoadedAssetMetadata & {
+    motionlyType: 'video';
+    motionlyDuration: number;
+  };
+export type LoadedAsset = LoadedImageAsset | LoadedVideoAsset;
 
-/**
- * Load all assets from scene
- * Returns map of asset names to loaded images
- */
+export function isLoadedVideo(asset: LoadedAsset | undefined): asset is LoadedVideoAsset {
+  return asset?.motionlyType === 'video';
+}
+
+/** Load all imported visual assets without failing the whole project on one bad file. */
 export async function loadAssets(
   scene: Scene,
   baseUrl: string = document.baseURI
@@ -31,7 +46,7 @@ export async function loadAssets(
   const entries = await Promise.all(
     scene.imports.map(async (asset): Promise<[string, LoadedAsset] | null> => {
       try {
-        return [asset.name, await loadAsset(asset.path, baseUrl, asset.type === 'svg')];
+        return [asset.name, await loadAsset(asset.path, baseUrl, asset.type)];
       } catch (error) {
         console.warn(`Could not load asset ${asset.path}:`, error);
         return null;
@@ -41,15 +56,23 @@ export async function loadAssets(
   return new Map(entries.filter((entry): entry is [string, LoadedAsset] => entry !== null));
 }
 
-/**
- * Load single asset
- */
-async function loadAsset(path: string, baseUrl: string, isSvg: boolean): Promise<LoadedAsset> {
+/** Load one image/SVG or video using the browser's native decoder. */
+export async function loadAsset(
+  path: string,
+  baseUrl: string,
+  type: AssetType
+): Promise<LoadedAsset> {
   const url = new URL(
     path.startsWith('/') ? `${import.meta.env.BASE_URL}${path.slice(1)}` : path,
     baseUrl
   ).href;
-  const image = new Image() as LoadedAsset;
+  if (type === 'video') return loadVideo(url);
+  return loadImage(url, type === 'svg');
+}
+
+async function loadImage(url: string, isSvg: boolean): Promise<LoadedAsset> {
+  const image = new Image() as LoadedImageAsset;
+  image.motionlyType = 'image';
   image.decoding = 'async';
   image.src = url;
   const svgSource = isSvg
@@ -63,7 +86,109 @@ async function loadAsset(path: string, baseUrl: string, isSvg: boolean): Promise
   return image;
 }
 
-function parseSvg(source: string): LoadedAsset['motionlySvg'] {
+async function loadVideo(url: string): Promise<LoadedVideoAsset> {
+  const video = document.createElement('video') as LoadedVideoAsset;
+  video.motionlyType = 'video';
+  video.preload = 'auto';
+  video.muted = true;
+  video.defaultMuted = true;
+  video.playsInline = true;
+  video.src = url;
+  video.load();
+  if (video.readyState < HTMLMediaElement.HAVE_METADATA) await mediaEvent(video, 'loadedmetadata');
+  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) await mediaEvent(video, 'loadeddata');
+  video.width = Math.max(1, video.videoWidth);
+  video.height = Math.max(1, video.videoHeight);
+  video.motionlyDuration = Number.isFinite(video.duration) ? video.duration : 0;
+  return video;
+}
+
+function mediaEvent(
+  video: HTMLVideoElement,
+  event: 'loadedmetadata' | 'loadeddata' | 'seeked'
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      video.removeEventListener(event, complete);
+      video.removeEventListener('error', fail);
+    };
+    const complete = () => {
+      cleanup();
+      resolve();
+    };
+    const fail = () => {
+      cleanup();
+      reject(video.error ?? new Error(`Video failed during ${event}`));
+    };
+    video.addEventListener(event, complete, { once: true });
+    video.addEventListener('error', fail, { once: true });
+  });
+}
+
+export interface VideoSyncOptions {
+  playing: boolean;
+  exact?: boolean;
+}
+
+export function videoSourceTime(sourceTime: number, duration: number, trimOut = 0): number {
+  const maximum = Math.max(0, duration - Math.max(0, trimOut) - 0.001);
+  return Math.max(0, Math.min(maximum, Number.isFinite(sourceTime) ? sourceTime : 0));
+}
+
+/**
+ * Synchronize native video decoders to evaluated clip source times.
+ * Exact mode awaits seek completion for scrubbing and export; playback mode lets
+ * muted videos run natively and only corrects meaningful drift.
+ */
+export async function synchronizeVideoAssets(
+  frame: EvaluatedScene,
+  assets: Map<string, LoadedAsset>,
+  options: VideoSyncOptions
+): Promise<void> {
+  const active = new Map<string, Record<string, unknown>>();
+  for (const element of frame.elements) {
+    if (!element.assetName) continue;
+    const asset = assets.get(element.assetName);
+    if (!isLoadedVideo(asset)) continue;
+    active.set(element.assetName, element.render as unknown as Record<string, unknown>);
+  }
+
+  const operations: Promise<void>[] = [];
+  for (const [name, asset] of assets) {
+    if (!isLoadedVideo(asset)) continue;
+    const render = active.get(name);
+    if (!render) {
+      asset.pause();
+      continue;
+    }
+    const sourceTime = Number(render['mediaTime'] ?? 0);
+    const trimOut = Math.max(0, Number(render['mediaTrimOut'] ?? 0));
+    const desired = videoSourceTime(sourceTime, asset.motionlyDuration, trimOut);
+    const tolerance = options.exact ? 1 / 1000 : 0.15;
+    if (Math.abs(asset.currentTime - desired) > tolerance) {
+      operations.push(seekVideo(asset, desired));
+    }
+    if (options.playing && asset.paused) {
+      operations.push(asset.play().catch(() => undefined));
+    } else if (!options.playing) {
+      asset.pause();
+    }
+  }
+  await Promise.all(operations);
+}
+
+export function pauseVideoAssets(assets: Map<string, LoadedAsset>): void {
+  for (const asset of assets.values()) if (isLoadedVideo(asset)) asset.pause();
+}
+
+async function seekVideo(video: LoadedVideoAsset, time: number): Promise<void> {
+  if (Math.abs(video.currentTime - time) <= 1 / 1000) return;
+  const done = mediaEvent(video, 'seeked');
+  video.currentTime = time;
+  await done;
+}
+
+function parseSvg(source: string): MotionlySvgData {
   const svg = new DOMParser().parseFromString(source, 'image/svg+xml').documentElement;
   const viewBox = svg.getAttribute('viewBox')?.split(/\s+/).map(Number);
   const width = viewBox?.[2] ?? Number.parseFloat(svg.getAttribute('width') ?? '1');

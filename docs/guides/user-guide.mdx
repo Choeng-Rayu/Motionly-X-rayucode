@@ -48,30 +48,24 @@ Motionly updates the `.motion` source after each visual edit.
 
 ## Timeline
 
-The timeline shows a row and visible clip range for each layer.
+The timeline uses persistent purpose-based tracks instead of one row per element:
 
-- Scrub the ruler to seek
-- Click a row or clip to select its layer
-- Drag the timeline divider to make the timeline taller or shorter
-- Drag a clip's left or right trim handle to adjust its visible range
-- **Drag assets from the Assets panel onto the timeline to create clips**
-- Green drop indicator shows where the clip will be placed
-- Timeline clips show thumbnails for visual reference
-- Click X on a clip to delete it
-- Delete removes the selected layer
-- The playhead marks the current frame across every row
+- **Main Track** anchors the primary image/video sequence and packs clips end-to-end while Magnet is enabled.
+- **Overlay Tracks** hold one compatible content type (text, image, video, or effects). Non-overlapping items reuse a track; simultaneous items receive another overlay.
+- **Audio Tracks** remain separate from visual content.
 
-## Timeline Clips (New!)
+Editing controls:
 
-Motionly now supports dragging media directly onto the timeline:
+- Scrub the ruler or drag the playhead to seek to an exact frame.
+- Drag clips horizontally to reorder/time them or vertically to a compatible track.
+- Drag either edge to trim; Main Track trims ripple following clips when Magnet is enabled.
+- Select a clip and use Split to cut it at the playhead. This works for media, text, image, overlay, and effect clips.
+- Toggle Magnet for edge/playhead snapping and gap-free Main Track editing.
+- Use Undo/Redo or `Ctrl/Cmd+Z` and `Ctrl/Cmd+Shift+Z`.
+- Zoom with the timeline controls or `Ctrl/Cmd` + wheel/trackpad pinch.
+- Use the eye on visual tracks and speaker on audio-capable tracks to isolate work without deleting it.
 
-1. Open the Assets panel from the left navigation rail
-2. Browse your images, SVGs, videos, and audio files
-3. Drag any asset onto the timeline
-4. Drop it at the desired position (green line shows drop point)
-5. Clip appears with thumbnail and persists in `.motion` format
-
-Clips automatically save to your project using the `clip` syntax. Keep original asset files in the same location to reload projects correctly.
+Dragging media from Assets creates a persisted `clip`. Track declarations, clip timing, visibility, and mute state save through `.motion`, so reopening a project reconstructs the same timeline.
 
 ## Audio
 

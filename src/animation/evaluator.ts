@@ -28,44 +28,115 @@ export function evaluateScene(scene: Scene, time: number): EvaluatedScene {
   const elements = scene.elements
     .filter(
       (element) =>
-        element.kind !== 'asset' || !element.assetName || !clippedAssets.has(element.assetName)
+        (element.kind !== 'asset' || !element.assetName || !clippedAssets.has(element.assetName)) &&
+        elementTrackVisible(scene, element) &&
+        elementWindowActive(element, time)
     )
-    .map((element) => ({
-      ...element,
-      render: evaluateElement(element, scene.animations, time),
-    }));
+    .map((element) => {
+      const render = evaluateElement(element, scene.animations, time);
+      if (element.asset?.type === 'video') render.mediaTime = Math.max(0, time);
+      return { ...element, render };
+    });
 
   // Visual tracks stack bottom-to-top: higher track numbers render last.
+  // Authored source order is the explicit same-track tie-breaker.
   const activeClips = scene.clips
-    .filter((clip) => time >= clip.start && time < clip.start + clip.duration)
-    .sort((a, b) => trackRank(a.track) - trackRank(b.track));
+    .filter((clip) => {
+      const track = scene.tracks.find((candidate) => candidate.id === String(clip.track));
+      if (track?.role === 'audio' || track?.hidden) return false;
+      const transitionTail = clip.transitionOut === 'crossfade' ? clip.transitionOutDuration : 0;
+      return time >= clip.start && time < clip.start + clip.duration + transitionTail;
+    })
+    .sort(
+      (a, b) =>
+        clipTrackRank(scene, a.track) - clipTrackRank(scene, b.track) ||
+        a.sourceOrder - b.sourceOrder
+    );
 
   for (const clip of activeClips) {
     if (!clip.asset) continue;
+    const sourceElement = scene.elements.find(
+      (element) => element.kind === 'asset' && element.assetName === clip.assetName
+    );
+    const sourceRender = sourceElement
+      ? evaluateElement(sourceElement, scene.animations, time)
+      : ({
+          x: 0,
+          y: 0,
+          scale: 1,
+          rotation: 0,
+          opacity: 1,
+          center: true,
+          cover: true,
+          layer: 'content',
+        } as ElementProperties);
 
-    // Create an element from the clip for rendering
+    const clipEnd = clip.start + clip.duration;
+    let transitionOpacity = 1;
+    if (clip.transitionIn === 'crossfade' && clip.transitionInDuration > 0) {
+      transitionOpacity *= clamp((time - clip.start) / clip.transitionInDuration);
+    }
+    if (clip.transitionOut === 'crossfade' && clip.transitionOutDuration > 0 && time >= clipEnd) {
+      transitionOpacity *= 1 - clamp((time - clipEnd) / clip.transitionOutDuration);
+    }
+    const sourceOpacity = Number(sourceRender.opacity ?? 1);
+
     const clipElement: import('../types/scene').EvaluatedElement = {
       id: clip.id,
       kind: 'asset',
       assetName: clip.assetName,
       asset: clip.asset,
-      properties: {} as ElementProperties,
+      properties: sourceElement?.properties ?? ({} as ElementProperties),
       render: {
-        x: 0,
-        y: 0,
-        scale: 1,
-        rotation: 0,
-        opacity: 1,
-        center: true,
-        cover: true,
-        layer: 'content',
+        ...sourceRender,
+        opacity: sourceOpacity * transitionOpacity,
+        mediaTime: Math.max(0, clip.trimIn + time - clip.start),
+        mediaTrimOut: clip.trimOut,
+        mediaVolume: clip.volume ?? 1,
+        mediaMuted:
+          (scene.tracks.find((track) => track.id === String(clip.track))?.muted ?? false) ||
+          (clip.mute ?? false),
       } as ElementProperties,
     };
 
     elements.push(clipElement);
   }
 
+  elements.sort((left, right) => elementTrackRank(scene, left) - elementTrackRank(scene, right));
   return { canvas: scene.canvas, camera, elements };
+}
+
+function clipTrackRank(scene: Scene, trackId: number | string): number {
+  const track = scene.tracks.find((candidate) => candidate.id === String(trackId));
+  if (track) return track.role === 'main' ? 0 : 100 + track.order;
+  return trackRank(trackId);
+}
+
+function elementWindowActive(element: Element, time: number): boolean {
+  const properties = element.properties as unknown as Record<string, unknown>;
+  if (properties['start'] === undefined || properties['duration'] === undefined) return true;
+  const start = Number(properties['start']);
+  const duration = Number(properties['duration']);
+  if (!Number.isFinite(start) || !Number.isFinite(duration)) return true;
+  return time >= start && time < start + Math.max(0, duration);
+}
+
+function elementTrackVisible(scene: Scene, element: Element): boolean {
+  const trackId = (element.properties as unknown as Record<string, unknown>)['track'];
+  if (trackId === undefined) return true;
+  const track = scene.tracks.find((candidate) => candidate.id === String(trackId));
+  return track?.role !== 'audio' && !track?.hidden;
+}
+
+function elementTrackRank(
+  scene: Scene,
+  element: import('../types/scene').EvaluatedElement
+): number {
+  const clip = scene.clips.find((candidate) => candidate.id === element.id);
+  if (clip) return clipTrackRank(scene, clip.track);
+  const trackId = (element.render as unknown as Record<string, unknown>)['track'];
+  if (trackId !== undefined) return clipTrackRank(scene, String(trackId));
+  return 1000;
 }
 
 function trackRank(track: number | string): number {

@@ -151,8 +151,21 @@ describe('Easing Functions', () => {
       expect(result).toBeLessThan(1);
     });
 
+    it('solves timeline progress against the x axis', () => {
+      expect(ease(0.5, 'cubic-bezier(0, 0, 1, 1)')).toBeCloseTo(0.5, 6);
+      expect(ease(0.5, 'cubic-bezier(0.42, 0, 1, 1)')).toBeCloseTo(0.315, 2);
+      expect(ease(0.5, 'cubic-bezier(0, 0, 0.58, 1)')).toBeCloseTo(0.685, 2);
+    });
+
+    it('uses x control points rather than sampling y at raw progress', () => {
+      const first = ease(0.25, 'cubic-bezier(0.1, 0, 0.2, 1)');
+      const second = ease(0.25, 'cubic-bezier(0.8, 0, 0.9, 1)');
+      expect(first).toBeGreaterThan(second);
+    });
+
     it('should handle invalid bezier as power3.out', () => {
       expect(ease(0.5, 'cubic-bezier(invalid)')).toBe(ease(0.5, 'power3.out'));
+      expect(ease(0.5, 'cubic-bezier(-0.1, 0, 1.1, 1)')).toBe(ease(0.5, 'power3.out'));
     });
   });
 

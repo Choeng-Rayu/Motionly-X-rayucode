@@ -9,6 +9,7 @@ function serializeNode(node: ASTNode): string {
   if (node.type === 'Camera') return block('camera', node.properties);
   if (node.type === 'Audio') return `audio "${escapeString(node.path)}"`;
   if (node.type === 'Clip') return block(`clip ${node.assetName}`, node.properties);
+  if (node.type === 'Track') return block(`track ${node.name}`, node.properties);
   if (node.type === 'Import') return `import "${escapeString(node.path)}" as ${node.name}`;
   if (node.type === 'Sequence') return block(`sequence ${node.name}`, node.properties);
   if (node.type === 'Element')
