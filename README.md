@@ -1,14 +1,10 @@
-<table width="100%">
-  <tr>
-    <td align="left" width="120">
-      <img src="public/logo.svg" alt="Motionly Logo" width="100" />
-    </td>
-    <td align="right">
-      <h1>Motionly</h1>
-      <h3 style="margin-top: -10px;">AI-native motion graphics editor</h3>
-    </td>
-  </tr>
-</table>
+<div align="center">
+  <img src="public/logo.svg" alt="Motionly Logo" width="100">
+  
+  # Motionly
+  
+  **AI-native motion graphics editor**
+</div>
 
 <p align="center">
   <em>AI-assisted workflows create editable animation projects you can refine visually.<br/>Edit timing, assets, animations, and layouts before exporting the final result.</em>
